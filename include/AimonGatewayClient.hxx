@@ -52,7 +52,10 @@ private:
     std::string toolFirewallGetSessions();
     std::string toolFirewallBlockIp(const std::string &ip, const std::string &reason);
     std::string toolFirewallUnblockIp(const std::string &ip);
-    std::string toolSnmpGetDeviceMetrics(const std::string &targetIp);
+    std::string toolSnmpGetDeviceMetrics(const std::string &targetIp, const std::string &filter);
+    std::string toolSnmpGetWanStatus(const std::string &targetIp);
+    std::string toolSnmpGetInterfaceCounters(const std::string &targetIp, const std::string &ifName);
+    std::string toolSnmpQueryOid(const std::string &targetIp, const std::string &oidStr, const std::string &community);
 
     std::shared_ptr<RouterDriver> _routerDriver;
 

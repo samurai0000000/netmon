@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetMon — Real-Time Network & SNMP Telemetry</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="navbar">
+            <div class="brand">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>NetMon</h1>
+                    <span class="subtext">Telemetry & SNMP Gateway</span>
+                </div>
+            </div>
+
+            <div class="status-indicators">
+                <div class="pill-badge status-live">
+                    <span class="pulse-dot"></span>
+                    <span id="daemon-status">ONLINE</span>
+                </div>
+                <div class="pill-badge status-meta" id="uptime-pill">
+                    <span>Uptime: <strong id="daemon-uptime">--</strong></span>
+                </div>
+                <div class="pill-badge status-meta" id="db-pill">
+                    <span>DB: <strong id="db-size">--</strong></span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Dashboard View -->
+        <main class="content">
+            <!-- WAN Telemetry Section (MRTG Modernization) -->
+            <section class="section-container">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>WAN Uplink Telemetry</h2>
+                        <span class="badge-tag">SNMP v2c / 64-bit HC</span>
+                    </div>
+                    <div class="timeframe-selector">
+                        <button class="time-btn" data-hours="1">1 Hour</button>
+                        <button class="time-btn" data-hours="6">6 Hours</button>
+                        <button class="time-btn active" data-hours="24">24 Hours</button>
+                        <button class="time-btn" data-hours="168">7 Days</button>
+                    </div>
+                </div>
+
+                <div class="wan-grid" id="wan-container">
+                    <!-- Dynamically populated by app.js -->
+                    <div class="loading-placeholder">Discovering WAN interfaces...</div>
+                </div>
+            </section>
+
+            <!-- Secondary Metrics Grid: LAN Traffic & Top Talkers -->
+            <section class="section-container">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>LAN Network Traffic & Sniffer</h2>
+                        <span class="badge-tag">PCAP Live Capture</span>
+                    </div>
+                </div>
+
+                <div class="metrics-grid">
+                    <!-- Summary Card -->
+                    <div class="glass-card stat-card">
+                        <h3>LAN Throughput</h3>
+                        <div class="stat-value" id="lan-current-rate">0.00 <span class="unit">Mbps</span></div>
+                        <div class="stat-detail-row">
+                            <span>Total Packets: <strong id="lan-total-packets">0</strong></span>
+                            <span>Capture State: <strong class="text-success" id="pcap-state">Active</strong></span>
+                        </div>
+                    </div>
+
+                    <!-- Protocol Distribution -->
+                    <div class="glass-card stat-card">
+                        <h3>Protocol Breakdown</h3>
+                        <div class="protocol-bar" id="protocol-bar">
+                            <div class="proto-segment proto-https" style="width: 60%"></div>
+                            <div class="proto-segment proto-dns" style="width: 15%"></div>
+                            <div class="proto-segment proto-ssh" style="width: 15%"></div>
+                            <div class="proto-segment proto-other" style="width: 10%"></div>
+                        </div>
+                        <div class="protocol-legend" id="protocol-legend">
+                            <span><i class="dot proto-https-dot"></i> HTTPS</span>
+                            <span><i class="dot proto-dns-dot"></i> DNS</span>
+                            <span><i class="dot proto-ssh-dot"></i> SSH</span>
+                            <span><i class="dot proto-other-dot"></i> Other</span>
+                        </div>
+                    </div>
+
+                    <!-- Top Talker Card -->
+                    <div class="glass-card stat-card talkers-card">
+                        <h3>Top Bandwidth Hosts (15m)</h3>
+                        <ul class="top-talker-list" id="top-talkers-list">
+                            <li><span>Scanning LAN...</span></li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- LAN Devices Registry Section -->
+            <section class="section-container">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>Discovered LAN Devices</h2>
+                        <span class="badge-tag" id="devices-count-badge">0 Devices</span>
+                    </div>
+                    <div class="table-search">
+                        <input type="text" id="device-search" placeholder="Search IP, MAC, Name, or Vendor...">
+                    </div>
+                </div>
+
+                <div class="glass-card table-card">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Device Name</th>
+                                <th>IPv4 Address</th>
+                                <th>MAC Address</th>
+                                <th>OUI Vendor</th>
+                                <th>Category</th>
+                                <th>Last Seen</th>
+                            </tr>
+                        </thead>
+                        <tbody id="devices-tbody">
+                            <tr><td colspan="6" class="text-center">Loading device registry...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <span>NetMon v1.0.0 &bull; Copyright &copy; 2026, Charles Chiou &bull; Autonomous AI & Network Telemetry</span>
+        </footer>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

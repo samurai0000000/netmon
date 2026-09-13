@@ -301,16 +301,72 @@ bool AimonGatewayClient::sendRegistration() {
                 },
                 {
                     {"name", "snmp_get_device_metrics"},
-                    {"description", "Query SNMP metrics for network switches, access points, or routers."},
+                    {"description", "Query SNMP metrics, system information, uptime, and filtered interfaces for network switches or routers."},
                     {"inputSchema", {
                         {"type", "object"},
                         {"properties", {
                             {"target_ip", {
                                 {"type", "string"},
-                                {"description", "IP address of the target network device to query"}
+                                {"description", "Optional target IP (defaults to primary configured gateway)"}
+                            }},
+                            {"filter", {
+                                {"type", "string"},
+                                {"description", "Interface filter level: 'monitored' (default, skips down/loopback/virtual), 'active', or 'all'"}
+                            }}
+                        }}
+                    }}
+                },
+                {
+                    {"name", "snmp_get_wan_status"},
+                    {"description", "Get dedicated WAN uplink bandwidth rates, 24-hour peaks, and throughput statistics (MRTG replacement)."},
+                    {"inputSchema", {
+                        {"type", "object"},
+                        {"properties", {
+                            {"target_ip", {
+                                {"type", "string"},
+                                {"description", "Optional target IP (defaults to primary configured gateway)"}
+                            }}
+                        }}
+                    }}
+                },
+                {
+                    {"name", "snmp_get_interface_counters"},
+                    {"description", "Get port diagnostics, line speed, 64-bit HC octet counters, and packet errors for a specific interface."},
+                    {"inputSchema", {
+                        {"type", "object"},
+                        {"properties", {
+                            {"target_ip", {
+                                {"type", "string"},
+                                {"description", "IP address of the target network device"}
+                            }},
+                            {"interface_name", {
+                                {"type", "string"},
+                                {"description", "Interface name to inspect (e.g. 'eth1', 'eth2')"}
                             }}
                         }},
-                        {"required", json::array({"target_ip"})}
+                        {"required", json::array({"interface_name"})}
+                    }}
+                },
+                {
+                    {"name", "snmp_query_oid"},
+                    {"description", "Perform a direct SNMP GET query for an arbitrary standard MIB or enterprise OID."},
+                    {"inputSchema", {
+                        {"type", "object"},
+                        {"properties", {
+                            {"target_ip", {
+                                {"type", "string"},
+                                {"description", "IP address of the target network device"}
+                            }},
+                            {"oid", {
+                                {"type", "string"},
+                                {"description", "SNMP OID in dotted numeric notation (e.g. '1.3.6.1.2.1.1.1.0')"}
+                            }},
+                            {"community", {
+                                {"type", "string"},
+                                {"description", "Optional SNMP community string (defaults to configured or 'public')"}
+                            }}
+                        }},
+                        {"required", json::array({"target_ip", "oid"})}
                     }}
                 }
             })}
@@ -414,7 +470,23 @@ void AimonGatewayClient::handleRequest(const std::string &line) {
                 resultText = toolFirewallUnblockIp(ip);
             } else if (toolName == "snmp_get_device_metrics") {
                 std::string targetIp = args.value("target_ip", "");
-                resultText = toolSnmpGetDeviceMetrics(targetIp);
+                std::string filter = args.value("filter", "monitored");
+                resultText = toolSnmpGetDeviceMetrics(targetIp, filter);
+            } else if (toolName == "snmp_get_wan_status") {
+                std::string targetIp = args.value("target_ip", "");
+                resultText = toolSnmpGetWanStatus(targetIp);
+            } else if (toolName == "snmp_get_interface_counters") {
+                std::string targetIp = args.value("target_ip", "");
+                std::string ifName = args.value("interface_name", "");
+                if (ifName.empty() && args.contains("interface")) {
+                    ifName = args.value("interface", "");
+                }
+                resultText = toolSnmpGetInterfaceCounters(targetIp, ifName);
+            } else if (toolName == "snmp_query_oid") {
+                std::string targetIp = args.value("target_ip", "");
+                std::string oidStr = args.value("oid", "");
+                std::string community = args.value("community", "");
+                resultText = toolSnmpQueryOid(targetIp, oidStr, community);
             } else {
                 json errResp = {
                     {"jsonrpc", "2.0"},
@@ -624,8 +696,20 @@ std::string AimonGatewayClient::toolFirewallUnblockIp(const std::string &ip) {
     return unconf.dump(2);
 }
 
-std::string AimonGatewayClient::toolSnmpGetDeviceMetrics(const std::string &targetIp) {
-    return SnmpAggregator::getInstance().getDeviceMetrics(targetIp).dump(2);
+std::string AimonGatewayClient::toolSnmpGetDeviceMetrics(const std::string &targetIp, const std::string &filter) {
+    return SnmpAggregator::getInstance().getDeviceMetrics(targetIp, filter).dump(2);
+}
+
+std::string AimonGatewayClient::toolSnmpGetWanStatus(const std::string &targetIp) {
+    return SnmpAggregator::getInstance().getWanStatus(targetIp).dump(2);
+}
+
+std::string AimonGatewayClient::toolSnmpGetInterfaceCounters(const std::string &targetIp, const std::string &ifName) {
+    return SnmpAggregator::getInstance().getInterfaceCounters(targetIp, ifName).dump(2);
+}
+
+std::string AimonGatewayClient::toolSnmpQueryOid(const std::string &targetIp, const std::string &oidStr, const std::string &community) {
+    return SnmpAggregator::getInstance().queryOid(targetIp, oidStr, community).dump(2);
 }
 
 /*

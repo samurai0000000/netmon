@@ -17,7 +17,7 @@ all: submodules
 	@-sudo -n setcap cap_net_raw=eip $(BUILD_DIR)/netmon 2>/dev/null || true
 
 submodules:
-	@if [ -f .gitmodules ] && [ ! -f third_party/json/include/nlohmann/json.hpp ]; then \
+	@if [ -f .gitmodules ] && ([ ! -f third_party/json/include/nlohmann/json.hpp ] || [ ! -f third_party/cpp-httplib/httplib.h ]); then \
 		git submodule update --init --recursive; \
 	fi
 

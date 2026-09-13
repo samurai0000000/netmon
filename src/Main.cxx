@@ -14,6 +14,9 @@
 #include "DeviceRegistry.hxx"
 #include "LanSniffer.hxx"
 #include "ZyxelDriver.hxx"
+#include "SnmpDatabase.hxx"
+#include "SnmpAggregator.hxx"
+#include "WebServer.hxx"
 #include "AimonGatewayClient.hxx"
 #include "NetMonShell.hxx"
 
@@ -22,6 +25,8 @@ static volatile sig_atomic_t g_shutdownRequested = 0;
 static void signalHandler(int sig) {
     (void)sig;
     g_shutdownRequested = 1;
+    WebServer::getInstance().stop();
+    SnmpAggregator::getInstance().stop();
     NetMonShell::getInstance().stop();
     LanSniffer::getInstance().stop();
     AimonGatewayClient::getInstance().stop();
@@ -45,6 +50,8 @@ static void printUsage(const char *progName) {
               << "  -i <iface>     Override sniffing network interface (e.g. br0)\n"
               << "  -g <host>      Override aimon gateway host (default: 192.168.8.39)\n"
               << "  -p <port>      Override aimon gateway port (default: 3885)\n"
+              << "  -w <port>      Override web server port (default: 3884)\n"
+              << "  --db <path>    Override SQLite database file path\n"
               << "  --version, -v  Display version and build metadata\n"
               << "  --help, -h     Display this help message\n";
 }
@@ -58,7 +65,9 @@ int main(int argc, char **argv) {
     std::string customConfigPath;
     std::string overrideInterface;
     std::string overrideGateway;
+    std::string overrideDb;
     int overridePort = 0;
+    int overrideWebPort = 0;
     std::string mode = "daemon";
 
     for (int i = 1; i < argc; ++i) {
@@ -85,6 +94,10 @@ int main(int argc, char **argv) {
             overrideGateway = argv[++i];
         } else if (arg == "-p" && i + 1 < argc) {
             overridePort = std::atoi(argv[++i]);
+        } else if (arg == "-w" && i + 1 < argc) {
+            overrideWebPort = std::atoi(argv[++i]);
+        } else if (arg == "--db" && i + 1 < argc) {
+            overrideDb = argv[++i];
         }
     }
 
@@ -102,6 +115,12 @@ int main(int argc, char **argv) {
     if (overridePort > 0) {
         Config::getInstance().setGatewayPort(overridePort);
     }
+    if (overrideWebPort > 0) {
+        Config::getInstance().setWebPort(overrideWebPort);
+    }
+    if (!overrideDb.empty()) {
+        Config::getInstance().setDatabaseFile(overrideDb);
+    }
 
     // Load persistent devices registry
     DeviceRegistry::getInstance().load();
@@ -110,6 +129,9 @@ int main(int argc, char **argv) {
     std::cout << "  Interface:      " << Config::getInstance().getInterface() << std::endl;
     std::cout << "  Gateway:        " << Config::getInstance().getGatewayHost()
               << ":" << Config::getInstance().getGatewayPort() << std::endl;
+    std::cout << "  Web Dashboard:  port " << Config::getInstance().getWebPort()
+              << " (" << (Config::getInstance().isWebEnabled() ? "enabled" : "disabled") << ")" << std::endl;
+    std::cout << "  Database:       " << Config::getInstance().getDatabaseFile() << std::endl;
     std::cout << "  Devices File:   " << DeviceRegistry::getInstance().getFilePath() << std::endl;
     std::cout << "  Known Devices:  " << DeviceRegistry::getInstance().getDeviceCount() << std::endl;
 
@@ -131,8 +153,17 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // Initialize SQLite time-series telemetry database
+    SnmpDatabase::getInstance().open();
+
     // Start streaming sniffer and telemetry
     LanSniffer::getInstance().start();
+
+    // Start background SNMP poller and rate calculator
+    SnmpAggregator::getInstance().start();
+
+    // Start embedded Web Server and live dashboard
+    WebServer::getInstance().start();
 
     // Initialize router driver (stubs until hardware credentials configured)
     auto zyxel = std::make_shared<ZyxelDriver>();
@@ -153,9 +184,15 @@ int main(int argc, char **argv) {
     }
 
     std::cout << "\nShutting down NetMon subsystems..." << std::endl;
+    WebServer::getInstance().stop();
+    SnmpAggregator::getInstance().stop();
     LanSniffer::getInstance().stop();
     AimonGatewayClient::getInstance().stop();
+
+    WebServer::getInstance().join();
+    SnmpAggregator::getInstance().join();
     AimonGatewayClient::getInstance().join();
+    SnmpDatabase::getInstance().close();
 
     std::cout << "NetMon shutdown complete." << std::endl;
     return 0;

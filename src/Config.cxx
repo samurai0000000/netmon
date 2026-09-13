@@ -25,7 +25,13 @@ Config::Config()
     , _devicesFile("~/.config/netmon/devices.cfg")
     , _logLevel("info")
     , _allowAiBlockIp(false)
-    , _allowAiRawExec(false) {
+    , _allowAiRawExec(false)
+    , _snmpPollIntervalSec(30)
+    , _databaseFile("~/.config/netmon/netmon_telemetry.db")
+    , _rawRetentionDays(90) {
+    _webConfig.enabled = true;
+    _webConfig.port = 3884;
+    _webConfig.bindAddress = "0.0.0.0";
 }
 
 std::string Config::resolveHomePath(const std::string &path) {
@@ -83,8 +89,65 @@ bool Config::load(const std::string &customPath) {
         cfg.lookupValue("allow_ai_raw_exec", _allowAiRawExec);
         cfg.lookupValue("router_user", _routerUser);
         cfg.lookupValue("router_key_path", _routerKeyPath);
+        cfg.lookupValue("database_file", _databaseFile);
+        cfg.lookupValue("raw_retention_days", _rawRetentionDays);
     } catch (const libconfig::SettingNotFoundException &) {
         // Some settings were missing, keep defaults
+    }
+
+    // Web section
+    if (cfg.exists("web")) {
+        try {
+            const libconfig::Setting &webSetting = cfg.lookup("web");
+            webSetting.lookupValue("enabled", _webConfig.enabled);
+            webSetting.lookupValue("port", _webConfig.port);
+            webSetting.lookupValue("bind_address", _webConfig.bindAddress);
+        } catch (const libconfig::SettingNotFoundException &) {
+        }
+    }
+
+    // SNMP section
+    if (cfg.exists("snmp")) {
+        try {
+            const libconfig::Setting &snmpSetting = cfg.lookup("snmp");
+            snmpSetting.lookupValue("poll_interval_sec", _snmpPollIntervalSec);
+
+            if (snmpSetting.exists("targets")) {
+                const libconfig::Setting &targetsSetting = snmpSetting["targets"];
+                int count = targetsSetting.getLength();
+                _snmpTargets.clear();
+                for (int i = 0; i < count; ++i) {
+                    const libconfig::Setting &t = targetsSetting[i];
+                    SnmpTargetConfig target;
+                    t.lookupValue("name", target.name);
+                    t.lookupValue("ip", target.ip);
+                    t.lookupValue("community", target.community);
+                    t.lookupValue("version", target.version);
+                    t.lookupValue("port", target.port);
+                    target.pollIntervalSec = _snmpPollIntervalSec;
+                    t.lookupValue("poll_interval_sec", target.pollIntervalSec);
+
+                    if (t.exists("interfaces")) {
+                        const libconfig::Setting &ifaces = t["interfaces"];
+                        for (int j = 0; j < ifaces.getLength(); ++j) {
+                            target.interfaces.push_back(std::string(ifaces[j].c_str()));
+                        }
+                    }
+
+                    if (t.exists("wan_interfaces")) {
+                        const libconfig::Setting &wanIfaces = t["wan_interfaces"];
+                        for (int j = 0; j < wanIfaces.getLength(); ++j) {
+                            target.wanInterfaces.push_back(std::string(wanIfaces[j].c_str()));
+                        }
+                    }
+
+                    if (!target.ip.empty()) {
+                        _snmpTargets.push_back(target);
+                    }
+                }
+            }
+        } catch (const libconfig::SettingNotFoundException &) {
+        }
     }
 
     // Override with environment variables if present (12-factor secure credential handling)
@@ -94,6 +157,58 @@ bool Config::load(const std::string &customPath) {
     if (envPass && *envPass) _routerPassword = envPass;
     const char *envKey = getenv("NETMON_ROUTER_KEY_PATH");
     if (envKey && *envKey) _routerKeyPath = envKey;
+
+    const char *envDb = getenv("NETMON_DB_PATH");
+    if (envDb && *envDb) _databaseFile = envDb;
+    const char *envRetention = getenv("NETMON_DB_RETENTION_DAYS");
+    if (envRetention && *envRetention) _rawRetentionDays = std::atoi(envRetention);
+
+    const char *envWebPort = getenv("NETMON_WEB_PORT");
+    if (envWebPort && *envWebPort) _webConfig.port = std::atoi(envWebPort);
+    const char *envWebEnabled = getenv("NETMON_WEB_ENABLED");
+    if (envWebEnabled && *envWebEnabled) {
+        std::string s(envWebEnabled);
+        _webConfig.enabled = (s == "1" || s == "true" || s == "TRUE" || s == "yes");
+    }
+    const char *envWebBind = getenv("NETMON_WEB_BIND");
+    if (envWebBind && *envWebBind) _webConfig.bindAddress = envWebBind;
+
+    const char *envSnmpTarget = getenv("NETMON_SNMP_TARGET");
+    if (envSnmpTarget && *envSnmpTarget) {
+        bool found = false;
+        for (auto &t : _snmpTargets) {
+            if (t.ip == envSnmpTarget) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            SnmpTargetConfig t;
+            t.ip = envSnmpTarget;
+            t.name = "default";
+            _snmpTargets.push_back(t);
+        }
+    }
+
+    const char *envSnmpComm = getenv("NETMON_SNMP_COMMUNITY");
+    if (envSnmpComm && *envSnmpComm) {
+        for (auto &t : _snmpTargets) {
+            t.community = envSnmpComm;
+        }
+    }
+    const char *envSnmpVer = getenv("NETMON_SNMP_VERSION");
+    if (envSnmpVer && *envSnmpVer) {
+        for (auto &t : _snmpTargets) {
+            t.version = envSnmpVer;
+        }
+    }
+    const char *envSnmpPort = getenv("NETMON_SNMP_PORT");
+    if (envSnmpPort && *envSnmpPort) {
+        int p = std::atoi(envSnmpPort);
+        for (auto &t : _snmpTargets) {
+            t.port = p;
+        }
+    }
 
     return true;
 }
@@ -270,6 +385,66 @@ const std::string &Config::getRouterKeyPath() const {
 
 void Config::setRouterKeyPath(const std::string &path) {
     _routerKeyPath = path;
+}
+
+const std::vector<SnmpTargetConfig> &Config::getSnmpTargets() const {
+    return _snmpTargets;
+}
+
+void Config::setSnmpTargets(const std::vector<SnmpTargetConfig> &targets) {
+    _snmpTargets = targets;
+}
+
+void Config::addSnmpTarget(const SnmpTargetConfig &target) {
+    _snmpTargets.push_back(target);
+}
+
+int Config::getSnmpPollIntervalSec() const {
+    return _snmpPollIntervalSec;
+}
+
+void Config::setSnmpPollIntervalSec(int sec) {
+    _snmpPollIntervalSec = sec;
+}
+
+const std::string &Config::getDatabaseFile() const {
+    return _databaseFile;
+}
+
+void Config::setDatabaseFile(const std::string &file) {
+    _databaseFile = file;
+}
+
+int Config::getRawRetentionDays() const {
+    return _rawRetentionDays;
+}
+
+void Config::setRawRetentionDays(int days) {
+    _rawRetentionDays = days;
+}
+
+const WebConfig &Config::getWebConfig() const {
+    return _webConfig;
+}
+
+void Config::setWebConfig(const WebConfig &web) {
+    _webConfig = web;
+}
+
+int Config::getWebPort() const {
+    return _webConfig.port;
+}
+
+void Config::setWebPort(int port) {
+    _webConfig.port = port;
+}
+
+bool Config::isWebEnabled() const {
+    return _webConfig.enabled;
+}
+
+void Config::setWebEnabled(bool enabled) {
+    _webConfig.enabled = enabled;
 }
 
 /*

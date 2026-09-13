@@ -8,8 +8,26 @@
 #define NETMON_CONFIG_HXX
 
 #include <string>
+#include <vector>
 #include <memory>
 #include <libconfig.h++>
+
+struct SnmpTargetConfig {
+    std::string name;
+    std::string ip;
+    std::string community = "public";
+    std::string version = "2c";
+    int port = 161;
+    int pollIntervalSec = 30;
+    std::vector<std::string> interfaces;
+    std::vector<std::string> wanInterfaces;
+};
+
+struct WebConfig {
+    bool enabled = true;
+    int port = 3884;
+    std::string bindAddress = "0.0.0.0";
+};
 
 class Config {
 public:
@@ -51,6 +69,28 @@ public:
     const std::string &getRouterKeyPath() const;
     void setRouterKeyPath(const std::string &path);
 
+    const std::vector<SnmpTargetConfig> &getSnmpTargets() const;
+    void setSnmpTargets(const std::vector<SnmpTargetConfig> &targets);
+    void addSnmpTarget(const SnmpTargetConfig &target);
+
+    int getSnmpPollIntervalSec() const;
+    void setSnmpPollIntervalSec(int sec);
+
+    const std::string &getDatabaseFile() const;
+    void setDatabaseFile(const std::string &file);
+
+    int getRawRetentionDays() const;
+    void setRawRetentionDays(int days);
+
+    const WebConfig &getWebConfig() const;
+    void setWebConfig(const WebConfig &web);
+
+    int getWebPort() const;
+    void setWebPort(int port);
+
+    bool isWebEnabled() const;
+    void setWebEnabled(bool enabled);
+
     const std::string &getConfigPath() const;
     static std::string resolveHomePath(const std::string &path);
 
@@ -72,6 +112,12 @@ private:
     std::string _routerUser;
     std::string _routerPassword;
     std::string _routerKeyPath;
+
+    int         _snmpPollIntervalSec;
+    std::vector<SnmpTargetConfig> _snmpTargets;
+    std::string _databaseFile;
+    int         _rawRetentionDays;
+    WebConfig   _webConfig;
 };
 
 #endif /* NETMON_CONFIG_HXX */

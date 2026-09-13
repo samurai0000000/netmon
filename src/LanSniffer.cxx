@@ -301,6 +301,25 @@ void LanSniffer::scanArpTable() {
         std::istringstream iss(line);
         std::string ip, hwType, flags, mac, mask, dev;
         if (iss >> ip >> hwType >> flags >> mac >> mask >> dev) {
+            // Ignore incomplete / failed ARP resolutions (ATF_COM = 0x2)
+            unsigned long flagVal = std::strtoul(flags.c_str(), nullptr, 0);
+            if ((flagVal & 0x02) == 0) {
+                continue;
+            }
+
+            // Exclude virtual/container interfaces (Docker, libvirt, veth pairs)
+            if (dev == "docker0" || dev.rfind("docker", 0) == 0 ||
+                dev.rfind("veth", 0) == 0 || dev.rfind("virbr", 0) == 0 ||
+                dev.rfind("br-", 0) == 0) {
+                continue;
+            }
+
+            // Exclude Docker default bridge subnets (172.17.x.x .. 172.31.x.x)
+            if (ip.rfind("172.17.", 0) == 0 || ip.rfind("172.18.", 0) == 0 ||
+                ip.rfind("172.19.", 0) == 0 || ip.rfind("172.20.", 0) == 0) {
+                continue;
+            }
+
             if (mac != "00:00:00:00:00:00" && !mac.empty()) {
                 arpEntries.push_back({mac, ip});
             }

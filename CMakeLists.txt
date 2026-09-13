@@ -51,6 +51,8 @@ find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(CONFIGPP REQUIRED libconfig++)
 pkg_check_modules(PCAP REQUIRED libpcap)
+pkg_check_modules(NETSNMP REQUIRED netsnmp)
+pkg_check_modules(SQLITE3 REQUIRED sqlite3)
 
 # Source files
 set(SOURCES
@@ -61,6 +63,8 @@ set(SOURCES
     src/LanSniffer.cxx
     src/ZyxelDriver.cxx
     src/SnmpAggregator.cxx
+    src/SnmpDatabase.cxx
+    src/WebServer.cxx
     src/SecurityCheckpoint.cxx
     src/AimonGatewayClient.cxx
     src/NetMonShell.cxx
@@ -72,14 +76,19 @@ target_include_directories(netmon PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cpp-httplib
     ${CONFIGPP_INCLUDE_DIRS}
     ${PCAP_INCLUDE_DIRS}
+    ${NETSNMP_INCLUDE_DIRS}
+    ${SQLITE3_INCLUDE_DIRS}
 )
 
 target_link_libraries(netmon PRIVATE
     Threads::Threads
     ${CONFIGPP_LIBRARIES}
     ${PCAP_LIBRARIES}
+    ${NETSNMP_LIBRARIES}
+    ${SQLITE3_LIBRARIES}
 )
 
 if(CONFIGPP_LIBRARY_DIRS)
@@ -87,4 +96,10 @@ if(CONFIGPP_LIBRARY_DIRS)
 endif()
 if(PCAP_LIBRARY_DIRS)
     target_link_directories(netmon PRIVATE ${PCAP_LIBRARY_DIRS})
+endif()
+if(NETSNMP_LIBRARY_DIRS)
+    target_link_directories(netmon PRIVATE ${NETSNMP_LIBRARY_DIRS})
+endif()
+if(SQLITE3_LIBRARY_DIRS)
+    target_link_directories(netmon PRIVATE ${SQLITE3_LIBRARY_DIRS})
 endif()
