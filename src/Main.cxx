@@ -114,6 +114,18 @@ int main(int argc, char **argv) {
     std::cout << "  Known Devices:  " << DeviceRegistry::getInstance().getDeviceCount() << std::endl;
 
     if (mode == "status") {
+        std::string pcapReason, pcapRemediation;
+        bool pcapOk = LanSniffer::getInstance().checkPcapPermissions(pcapReason, pcapRemediation);
+        std::cout << "\n--- PCAP Permission Preflight ---" << std::endl;
+        if (pcapOk) {
+            std::cout << "  Raw Capture Socket:  PERMITTED (CAP_NET_RAW active)" << std::endl;
+        } else {
+            std::cout << "  Raw Capture Socket:  [WARNING] DENIED" << std::endl;
+            std::cout << "  Reason:              " << pcapReason << std::endl;
+            std::cout << "  Remediation:         " << pcapRemediation << std::endl;
+        }
+        std::cout << std::endl;
+
         NetMonShell::getInstance().executeCommand("status");
         NetMonShell::getInstance().executeCommand("devices");
         return 0;

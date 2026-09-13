@@ -33,6 +33,10 @@ public:
     void stop();
     bool isRunning() const;
     bool isPcapActive() const;
+    std::string getPcapStatus() const;
+    std::string getPcapError() const;
+    std::string getPcapRemediationHint() const;
+    bool checkPcapPermissions(std::string &reason, std::string &remediation) const;
 
     nlohmann::json getTopTalkers(size_t limit = 10, int windowMinutes = 15) const;
     nlohmann::json getTrafficSummary() const;
@@ -58,6 +62,9 @@ private:
     std::atomic<bool> _pcapActive;
     pcap_t *_pcapHandle;
     std::string _interface;
+    std::string _pcapStatus;
+    std::string _pcapError;
+    std::string _pcapRemediationHint;
 
     std::thread _pcapThread;
     std::thread _scannerThread;

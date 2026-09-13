@@ -54,7 +54,8 @@ bool Config::load(const std::string &customPath) {
         _configPath = resolveHomePath(customPath);
     } else {
         std::string homeDir = resolveHomePath("~/.config/netmon");
-        mkdir(homeDir.c_str(), 0755);
+        mkdir(homeDir.c_str(), 0700);
+        chmod(homeDir.c_str(), 0700);
         _configPath = homeDir + "/netmon.cfg";
     }
 
@@ -80,9 +81,19 @@ bool Config::load(const std::string &customPath) {
         cfg.lookupValue("log_level", _logLevel);
         cfg.lookupValue("allow_ai_block_ip", _allowAiBlockIp);
         cfg.lookupValue("allow_ai_raw_exec", _allowAiRawExec);
+        cfg.lookupValue("router_user", _routerUser);
+        cfg.lookupValue("router_key_path", _routerKeyPath);
     } catch (const libconfig::SettingNotFoundException &) {
         // Some settings were missing, keep defaults
     }
+
+    // Override with environment variables if present (12-factor secure credential handling)
+    const char *envUser = getenv("NETMON_ROUTER_USER");
+    if (envUser && *envUser) _routerUser = envUser;
+    const char *envPass = getenv("NETMON_ROUTER_PASSWORD");
+    if (envPass && *envPass) _routerPassword = envPass;
+    const char *envKey = getenv("NETMON_ROUTER_KEY_PATH");
+    if (envKey && *envKey) _routerKeyPath = envKey;
 
     return true;
 }
@@ -144,7 +155,24 @@ bool Config::save() {
             root["allow_ai_raw_exec"] = _allowAiRawExec;
         }
 
+        if (!_routerUser.empty()) {
+            if (!root.exists("router_user")) {
+                root.add("router_user", libconfig::Setting::TypeString) = _routerUser;
+            } else {
+                root["router_user"] = _routerUser;
+            }
+        }
+
+        if (!_routerKeyPath.empty()) {
+            if (!root.exists("router_key_path")) {
+                root.add("router_key_path", libconfig::Setting::TypeString) = _routerKeyPath;
+            } else {
+                root["router_key_path"] = _routerKeyPath;
+            }
+        }
+
         cfg.writeFile(_configPath.c_str());
+        chmod(_configPath.c_str(), 0600);
         return true;
     } catch (const std::exception &ex) {
         std::cerr << "Failed to write config: " << ex.what() << std::endl;
@@ -218,6 +246,30 @@ void Config::setAllowAiRawExec(bool allow) {
 
 const std::string &Config::getConfigPath() const {
     return _configPath;
+}
+
+const std::string &Config::getRouterUser() const {
+    return _routerUser;
+}
+
+void Config::setRouterUser(const std::string &user) {
+    _routerUser = user;
+}
+
+const std::string &Config::getRouterPassword() const {
+    return _routerPassword;
+}
+
+void Config::setRouterPassword(const std::string &pass) {
+    _routerPassword = pass;
+}
+
+const std::string &Config::getRouterKeyPath() const {
+    return _routerKeyPath;
+}
+
+void Config::setRouterKeyPath(const std::string &path) {
+    _routerKeyPath = path;
 }
 
 /*

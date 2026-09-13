@@ -34,6 +34,9 @@ LanSniffer::LanSniffer()
     , _pcapActive(false)
     , _pcapHandle(nullptr)
     , _interface("")
+    , _pcapStatus("inactive")
+    , _pcapError("")
+    , _pcapRemediationHint("")
     , _currentRingIdx(0)
     , _lastRingAdvance(0)
     , _totalBytes(0)
@@ -75,6 +78,49 @@ bool LanSniffer::isPcapActive() const {
     return _pcapActive.load();
 }
 
+std::string LanSniffer::getPcapStatus() const {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _pcapStatus;
+}
+
+std::string LanSniffer::getPcapError() const {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _pcapError;
+}
+
+std::string LanSniffer::getPcapRemediationHint() const {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _pcapRemediationHint;
+}
+
+bool LanSniffer::checkPcapPermissions(std::string &reason, std::string &remediation) const {
+    std::string iface = Config::getInstance().getInterface();
+    if (iface.empty()) {
+        iface = "br0";
+    }
+
+    char errbuf[PCAP_ERRBUF_SIZE];
+    memset(errbuf, 0, sizeof(errbuf));
+
+    pcap_t *testHandle = pcap_open_live(iface.c_str(), 64, 0, 10, errbuf);
+    if (!testHandle) {
+        reason = std::string(errbuf);
+        if (reason.find("permission") != std::string::npos ||
+            reason.find("Operation not permitted") != std::string::npos ||
+            reason.find("socket") != std::string::npos) {
+            remediation = "Run 'make setcap' or 'sudo setcap cap_net_raw=eip <binary>' to enable packet capture.";
+        } else {
+            remediation = "Verify interface '" + iface + "' exists and is UP (e.g. 'ip link show " + iface + "').";
+        }
+        return false;
+    }
+
+    pcap_close(testHandle);
+    reason = "Ready";
+    remediation = "";
+    return true;
+}
+
 static void pcapCallback(u_char *user, const struct pcap_pkthdr *h, const u_char *bytes) {
     auto *sniffer = reinterpret_cast<LanSniffer *>(user);
     if (sniffer) {
@@ -95,6 +141,50 @@ bool LanSniffer::start() {
     _running.store(true);
     _startTime = time(nullptr);
     _lastRingAdvance = _startTime;
+
+    // Open PCAP handle synchronously so permissions and active status are determined before threads launch
+    char errbuf[PCAP_ERRBUF_SIZE];
+    memset(errbuf, 0, sizeof(errbuf));
+
+    // snaplen = 96 bytes: capture only headers to eliminate memory bloat and disk writes
+    _pcapHandle = pcap_open_live(_interface.c_str(), 96, 1, 100, errbuf);
+    if (!_pcapHandle) {
+        std::string errStr(errbuf);
+        std::string hint = "Run 'make setcap' or 'sudo setcap cap_net_raw=eip <binary>' to enable packet capture.";
+
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _pcapStatus = (errStr.find("permission") != std::string::npos ||
+                           errStr.find("Operation not permitted") != std::string::npos ||
+                           errStr.find("socket") != std::string::npos)
+                          ? "permission_denied" : "open_failed";
+            _pcapError = errStr;
+            _pcapRemediationHint = hint;
+        }
+
+        std::cerr << "\n"
+                  << "****************************************************************\n"
+                  << " [WARNING] LIVE PACKET CAPTURE (PCAP) IS INACTIVE\n"
+                  << " Interface:   " << _interface << "\n"
+                  << " Error:       " << errStr << "\n"
+                  << " Status:      Degraded to /proc/net/dev and ARP cache scraping\n"
+                  << " Impact:      Protocol distribution (DNS, HTTPS, SSH) is zeroed\n"
+                  << " Remediation: " << hint << "\n"
+                  << "****************************************************************\n"
+                  << std::endl;
+
+        _pcapActive.store(false);
+    } else {
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _pcapStatus = "active";
+            _pcapError = "";
+            _pcapRemediationHint = "";
+        }
+        _pcapActive.store(true);
+        std::cout << "LanSniffer: Live streaming capture active on " << _interface
+                  << " (snaplen=96, Zero-DB mode)" << std::endl;
+    }
 
     // Start scanner thread (ARP table and /proc/net/dev)
     _scannerThread = std::thread(&LanSniffer::scannerWorker, this);
@@ -133,28 +223,13 @@ void LanSniffer::stop() {
 }
 
 void LanSniffer::pcapWorker() {
-    char errbuf[PCAP_ERRBUF_SIZE];
-    memset(errbuf, 0, sizeof(errbuf));
-
-    // snaplen = 96 bytes: capture only headers to eliminate memory bloat and disk writes
-    _pcapHandle = pcap_open_live(_interface.c_str(), 96, 1, 100, errbuf);
     if (!_pcapHandle) {
-        std::cerr << "LanSniffer: pcap_open_live(" << _interface
-                  << ") failed: " << errbuf
-                  << " (Live frame sniffer inactive; continuing with kernel ARP/proc telemetry)"
-                  << std::endl;
-        _pcapActive.store(false);
-
-        // Sleep gently while running to avoid busy-spinning
+        // PCAP failed to open; sleep gently while running to avoid busy-spinning
         while (_running.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
         return;
     }
-
-    _pcapActive.store(true);
-    std::cout << "LanSniffer: Live streaming capture active on " << _interface
-              << " (snaplen=96, Zero-DB mode)" << std::endl;
 
     while (_running.load()) {
         int ret = pcap_dispatch(_pcapHandle, 100, pcapCallback, reinterpret_cast<u_char *>(this));
@@ -546,6 +621,11 @@ nlohmann::json LanSniffer::getTrafficSummary() const {
     nlohmann::json result;
     result["interface"] = _interface;
     result["pcap_active"] = _pcapActive.load();
+    result["pcap_status"] = _pcapActive.load() ? "active" : (_pcapStatus.empty() ? "inactive" : _pcapStatus);
+    if (!_pcapActive.load() && !_pcapError.empty()) {
+        result["pcap_warning"] = _pcapError;
+        result["pcap_remediation"] = _pcapRemediationHint;
+    }
     result["uptime_seconds"] = uptime;
 
     if (_pcapActive.load()) {

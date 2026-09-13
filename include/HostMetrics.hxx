@@ -13,10 +13,10 @@
 
 struct HostMetrics {
     // Identity & Profiling
-    std::string mac;                 // Hardware MAC address (e.g. "00:16:3e:61:69:e0")
+    std::string mac;                 // Hardware MAC address (e.g. "02:00:00:00:00:01")
     std::string ip;                  // IPv4 address string
     std::string hostname;            // DHCP Option 12 or mDNS announced name
-    std::string vendor;              // IEEE OUI vendor string (e.g. "Apple, Inc.")
+    std::string vendor;              // IEEE OUI vendor string (e.g. "Vendor Name")
     uint8_t     estimatedOs = 0;     // IP TTL signature (64=Linux/iOS/Android, 128=Windows)
 
     // 1. Connection Lifecycle & State (IPFIX / Zeek)

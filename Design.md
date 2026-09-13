@@ -7,12 +7,11 @@
 
 All daemon configurations standardize on `libconfig++` and adhere to the XDG Base Directory specification (`~/.config/netmon/netmon.cfg`).
 
-### 1.2 Multi-Host Hardware Topology
-`netmon` is specifically deployed on the physical server with direct visibility into primary LAN network traffic:
-- **Host**: `rhino` (`x86_64`, Ubuntu Server, IP `192.168.8.30`).
-- **Hardware Requirement**: Dedicated Network Interface Card (NIC) bridged to `br0`, directly connected to the core LAN switch segment, ideally suited for packet capture and traffic analysis.
-- **Compilation**: Can be compiled on `builder` or directly on `rhino` (both share `x86_64` architecture and NFS `/home` mount).
-- **Runtime Environment**: Runs continuously within GNU `screen` session `netmon`, attached via `/home/samurai/bin/attach-netmon` (`screen -x -R netmon`).
+### 1.2 Deployment Model & Hardware Placement
+`netmon` is designed to be deployed on a Linux host with direct visibility into LAN network traffic:
+- **Hardware Requirement**: Dedicated Network Interface Card (NIC) bridged or in promiscuous mode (e.g. `br0` or mirror port), ideally suited for packet capture and traffic analysis.
+- **Compilation**: Standard C++17 build via top-level `Makefile` (`make -j$(nproc)`).
+- **Runtime Environment**: Operates as a system daemon, background service, or interactive CLI shell.
 
 ---
 
@@ -26,7 +25,7 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
                                        │ Raw Ethernet Frames
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                          NetMon Core Daemon (rhino)                         │
+│                             NetMon Core Daemon                              │
 │                                                                             │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │                    AI Security Checkpoint & Policy                    │  │
@@ -64,12 +63,12 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
 │                      │                                     │                │
 │  ┌───────────────────┴─────────────────────────────────────┴─────────────┐  │
 │  │                  AimonGatewayClient (TCP Client)                      │  │
-│  │        Exports netmon_* toolset to aimon on builder:3885              │  │
+│  │          Exports netmon_* toolset to aimon gateway                    │  │
 │  └───────────────────────────────────┬───────────────────────────────────┘  │
 └──────────────────────────────────────┼──────────────────────────────────────┘
                                        │ Line-delimited JSON-RPC 2.0 (TCP)
                                        ▼
-                         aimon Hub (builder:3885)
+                         aimon Hub (<gateway-host>:3885)
 ```
 
 ---
@@ -170,28 +169,28 @@ Every discovered device is categorized into one of three operational tiers:
 
 devices = (
     {
-        mac = "f4:4d:5c:75:2f:c4";
+        mac = "02:00:00:00:00:01";
         ip = "192.168.8.1";
-        name = "zyxel_usg";
-        vendor = "Zyxel Communications Corp";
+        name = "gateway";
+        vendor = "Network Gateway";
         category = "infrastructure";
         first_seen = 1788594000;
         last_seen = 1789236300;
     },
     {
-        mac = "00:16:3e:61:69:e0";
+        mac = "02:00:00:00:00:02";
         ip = "192.168.8.39";
-        name = "builder";
-        vendor = "Xen / QEMU Virtual NIC";
+        name = "server_node";
+        vendor = "Virtual Machine NIC";
         category = "infrastructure";
         first_seen = 1788594000;
         last_seen = 1789236300;
     },
     {
-        mac = "64:e8:33:7e:c6:f4";
+        mac = "02:00:00:00:00:03";
         ip = "192.168.8.215";
-        name = "visitor_iphone";
-        vendor = "Apple, Inc.";
+        name = "mobile_client";
+        vendor = "Mobile Device";
         category = "visitor";
         first_seen = 1789230000;
         last_seen = 1789236310;
@@ -213,7 +212,7 @@ To ensure `netmon` compiles, connects to `aimon`, and functions immediately with
 ### 3.5 AI Security Checkpoint & Policy
 
 The `SecurityCheckpoint` enforces hard safety boundaries on all AI agent invocations:
-1. **Protected Invariant IPs**: Prevents blocking gateway router (`192.168.8.1`), cluster servers (`builder`, `fox`, `rhino`), or loopback/broadcast addresses.
+1. **Protected Invariant IPs**: Prevents blocking gateway router, core cluster servers, or loopback/broadcast addresses.
 2. **Permission Matrix**: Configurable boolean flags (`allow_ai_block_ip`, `allow_ai_raw_exec`).
 3. **Audit Trail**: Every action requested by an AI agent is recorded in-memory and emitted to standard diagnostic logs with timestamps and agent identifiers.
 
@@ -236,37 +235,44 @@ The `SecurityCheckpoint` enforces hard safety boundaries on all AI agent invocat
 
 ---
 
-## 5. Deployment & Process Control
+## 5. Build & Execution
 
-- **Compile**: Compiled on `builder` or `rhino` via top-level `Makefile`:
+- **Compile**: Compile via the top-level `Makefile`:
   ```bash
-  cd ~/work/netmon && make -j$(nproc)
+  make -j$(nproc)
   ```
-- **Screen Attachment**:
+- **Packet Capture Permissions**: Attach Linux raw network capabilities to the compiled binary:
   ```bash
-  /home/samurai/bin/attach-netmon
+  make setcap
   ```
-- **Process Restart via Screen**:
-  ```bash
-  ssh -n rhino "screen -S netmon -X stuff \$' '"
-  ssh -n rhino "screen -S netmon -X stuff 'cd ~/work/netmon && ./build/netmon daemon
-'"
-  ```
+- **Running the Daemon**:
+  - Interactive terminal CLI mode:
+    ```bash
+    ./build/netmon daemon
+    ```
+  - Headless background service:
+    ```bash
+    ./build/netmon run
+    ```
+  - Interface and registry diagnostics:
+    ```bash
+    ./build/netmon status
+    ```
 
 ---
 
 ## 6. Verification Plan
 
 1. **Native Compilation**:
-   - Build cleanly with zero compiler warnings on `rhino` (`x86_64`).
-2. **Daemon Launch inside Screen**:
-   - Launch in persistent GNU `screen -S netmon` on `rhino` (`192.168.8.30`).
+   - Build cleanly with zero compiler warnings via `make -j$(nproc)`.
+2. **Capability Preflight**:
+   - Verify `./build/netmon status` reports active capture permissions.
 3. **Gateway Registration**:
-   - Verify connection to `aimon:3885` and confirmation of all 10 tools registered in `aimon`.
+   - Verify connection to `aimon` gateway (`port 3885`) and confirmation of tool registration.
 4. **Live MCP Query Verification**:
-   - Query `lan_get_devices` via MCP: Verify discovery of all ~50 unique MACs currently in the ARP cache.
-   - Query `lan_get_unregistered_devices` via MCP: Verify visitor phone identification and OUI resolution.
-   - Call `lan_name_device` via MCP: Verify dynamic update and persistence to `~/.config/netmon/devices.cfg`.
+   - Query `lan_get_devices` via MCP: Verify discovery of unique MACs from ARP cache and live frames.
+   - Query `lan_get_unregistered_devices` via MCP: Verify unregistered device identification and OUI resolution.
+   - Call `lan_name_device` via MCP: Verify dynamic update and persistence to `devices.cfg`.
    - Query `lan_get_top_talkers` and `lan_get_traffic_summary` via MCP: Verify real-time bandwidth and protocol metrics.
    - Test stub tools (`firewall_get_status`, `snmp_get_device_metrics`): Verify clean `"Not configured"` responses without crashing.
 

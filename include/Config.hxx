@@ -42,6 +42,15 @@ public:
     bool getAllowAiRawExec() const;
     void setAllowAiRawExec(bool allow);
 
+    const std::string &getRouterUser() const;
+    void setRouterUser(const std::string &user);
+
+    const std::string &getRouterPassword() const;
+    void setRouterPassword(const std::string &pass);
+
+    const std::string &getRouterKeyPath() const;
+    void setRouterKeyPath(const std::string &path);
+
     const std::string &getConfigPath() const;
     static std::string resolveHomePath(const std::string &path);
 
@@ -60,6 +69,9 @@ private:
     std::string _logLevel;
     bool        _allowAiBlockIp;
     bool        _allowAiRawExec;
+    std::string _routerUser;
+    std::string _routerPassword;
+    std::string _routerKeyPath;
 };
 
 #endif /* NETMON_CONFIG_HXX */

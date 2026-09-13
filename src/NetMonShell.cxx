@@ -46,6 +46,23 @@ void NetMonShell::printBanner() const {
     std::cout << "  NetMon - Network Monitor & AI Telemetry Gateway           " << std::endl;
     std::cout << "  Type 'help' for commands, 'quit' to exit                  " << std::endl;
     std::cout << "============================================================" << std::endl;
+
+    if (!LanSniffer::getInstance().isPcapActive()) {
+        std::string err = LanSniffer::getInstance().getPcapError();
+        std::string hint = LanSniffer::getInstance().getPcapRemediationHint();
+        if (err.empty()) {
+            err = "Packet capture interface failed to open.";
+        }
+        if (hint.empty()) {
+            hint = "Run 'make setcap' or verify interface configuration in netmon.cfg";
+        }
+        std::cout << "\n************************************************************" << std::endl;
+        std::cout << " [WARNING] LIVE PACKET CAPTURE (PCAP) IS INACTIVE" << std::endl;
+        std::cout << " Status:  Degraded to kernel ARP and /proc/net/dev scraping" << std::endl;
+        std::cout << " Cause:   " << err << std::endl;
+        std::cout << " Action:  " << hint << std::endl;
+        std::cout << "************************************************************\n" << std::endl;
+    }
 }
 
 void NetMonShell::printHelp() const {
@@ -65,10 +82,23 @@ void NetMonShell::printHelp() const {
 void NetMonShell::cmdStatus() {
     auto summary = LanSniffer::getInstance().getTrafficSummary();
     bool connected = AimonGatewayClient::getInstance().isConnected();
+    bool pcapActive = summary.value("pcap_active", false);
 
     std::cout << "--- NetMon Daemon Status ---" << std::endl;
     std::cout << "Interface:        " << Config::getInstance().getInterface() << std::endl;
-    std::cout << "Capture Engine:   " << (summary.value("pcap_active", false) ? "Live libpcap streaming (Zero-DB mode)" : "Proc/ARP kernel telemetry (restricted permissions)") << std::endl;
+    if (pcapActive) {
+        std::cout << "Capture Engine:   Live libpcap streaming (Zero-DB mode)" << std::endl;
+    } else {
+        std::cout << "Capture Engine:   [WARNING] Proc/ARP kernel telemetry (INACTIVE)" << std::endl;
+        std::string warn = summary.value("pcap_warning", "");
+        std::string remed = summary.value("pcap_remediation", "");
+        if (!warn.empty()) {
+            std::cout << "PCAP Error:       " << warn << std::endl;
+        }
+        if (!remed.empty()) {
+            std::cout << "Remediation:      " << remed << std::endl;
+        }
+    }
     std::cout << "Gateway Client:   " << (connected ? "CONNECTED (builder:3885)" : "DISCONNECTED (reconnecting...)") << std::endl;
     std::cout << "Registered Devs:  " << DeviceRegistry::getInstance().getDeviceCount() << std::endl;
     std::cout << "Uptime:           " << summary.value("uptime_seconds", 0) << " seconds" << std::endl;
@@ -181,8 +211,14 @@ void NetMonShell::cmdTopTalkers(int limit, int windowMins) {
 
 void NetMonShell::cmdTraffic() {
     auto summary = LanSniffer::getInstance().getTrafficSummary();
+    bool pcapActive = summary.value("pcap_active", false);
 
     std::cout << "--- LAN Traffic & Protocol Breakdown ---" << std::endl;
+    if (!pcapActive) {
+        std::cout << "[WARNING] PCAP packet capture is INACTIVE (permission denied)." << std::endl;
+        std::cout << "          Protocol counts below require CAP_NET_RAW capabilities." << std::endl;
+        std::cout << "          Run 'make setcap' to activate live packet analysis." << std::endl;
+    }
     std::cout << "Total Transferred:   " << summary.value("total_bytes", 0) << " bytes ("
               << summary.value("total_packets", 0) << " packets)" << std::endl;
     std::cout << "Current Throughput:  " << std::fixed << std::setprecision(2)

@@ -46,68 +46,13 @@ bool DeviceRegistry::load(const std::string &customPath) {
     try {
         cfg.readFile(_filePath.c_str());
     } catch (const libconfig::FileIOException &) {
-        // File does not exist yet; populate initial known infrastructure defaults
-        DeviceInfo zyxel;
-        zyxel.mac = "f4:4d:5c:75:2f:c4";
-        zyxel.ip = "192.168.8.1";
-        zyxel.name = "zyxel_usg";
-        zyxel.vendor = "Zyxel Communications Corp";
-        zyxel.category = "infrastructure";
-        zyxel.firstSeen = time(nullptr);
-        zyxel.lastSeen = time(nullptr);
-        _devices[zyxel.mac] = zyxel;
-
-        DeviceInfo builder;
-        builder.mac = "00:16:3e:61:69:e0";
-        builder.ip = "192.168.8.39";
-        builder.name = "builder";
-        builder.vendor = "Xen / QEMU Virtual NIC";
-        builder.category = "infrastructure";
-        builder.firstSeen = time(nullptr);
-        builder.lastSeen = time(nullptr);
-        _devices[builder.mac] = builder;
-
-        DeviceInfo fox;
-        fox.mac = "d8:3a:dd:cd:86:1a";
-        fox.ip = "192.168.8.245";
-        fox.name = "fox";
-        fox.vendor = "Raspberry Pi Foundation";
-        fox.category = "infrastructure";
-        fox.firstSeen = time(nullptr);
-        fox.lastSeen = time(nullptr);
-        _devices[fox.mac] = fox;
-
-        DeviceInfo rhino;
-        rhino.mac = "14:02:ec:38:35:1a";
-        rhino.ip = "192.168.8.30";
-        rhino.name = "rhino";
-        rhino.vendor = "Intel Corporation";
-        rhino.category = "infrastructure";
-        rhino.firstSeen = time(nullptr);
-        rhino.lastSeen = time(nullptr);
-        _devices[rhino.mac] = rhino;
-
-        _dirty = true;
-        // Internal save called while holding lock
-        // Release lock momentarily or perform raw write
-        // We will call raw write here
+        // File does not exist yet; initialize an empty registry.
+        // Dynamic discovery (e.g. LanSniffer scanning /proc/net/arp)
+        // will populate detected devices at runtime.
         try {
             libconfig::Config outCfg;
             libconfig::Setting &root = outCfg.getRoot();
-            libconfig::Setting &devList = root.add("devices", libconfig::Setting::TypeList);
-
-            for (const auto &pair : _devices) {
-                const auto &dev = pair.second;
-                libconfig::Setting &item = devList.add(libconfig::Setting::TypeGroup);
-                item.add("mac", libconfig::Setting::TypeString) = dev.mac;
-                item.add("ip", libconfig::Setting::TypeString) = dev.ip;
-                item.add("name", libconfig::Setting::TypeString) = dev.name;
-                item.add("vendor", libconfig::Setting::TypeString) = dev.vendor;
-                item.add("category", libconfig::Setting::TypeString) = dev.category;
-                item.add("first_seen", libconfig::Setting::TypeInt64) = static_cast<long long>(dev.firstSeen);
-                item.add("last_seen", libconfig::Setting::TypeInt64) = static_cast<long long>(dev.lastSeen);
-            }
-
+            root.add("devices", libconfig::Setting::TypeList);
             outCfg.writeFile(_filePath.c_str());
             _dirty = false;
         } catch (...) {
@@ -183,6 +128,7 @@ bool DeviceRegistry::save() {
         }
 
         cfg.writeFile(_filePath.c_str());
+        chmod(_filePath.c_str(), 0600);
         _dirty = false;
         return true;
     } catch (const std::exception &ex) {

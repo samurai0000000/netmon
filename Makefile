@@ -8,17 +8,28 @@ SHELL := /bin/bash
 BUILD_DIR := build
 NUM_PROCS := $(shell nproc 2>/dev/null || echo 4)
 
-.PHONY: all clean distclean submodules
+.PHONY: all clean distclean submodules setcap
 
 all: submodules
 	@mkdir -p $(BUILD_DIR)
 	@cd $(BUILD_DIR) && (test -f Makefile || cmake .. -DCMAKE_BUILD_TYPE=Release)
 	@$(MAKE) -C $(BUILD_DIR) -j$(NUM_PROCS)
+	@-sudo -n setcap cap_net_raw=eip $(BUILD_DIR)/netmon 2>/dev/null || true
 
 submodules:
 	@if [ -f .gitmodules ] && [ ! -f third_party/json/include/nlohmann/json.hpp ]; then \
 		git submodule update --init --recursive; \
 	fi
+
+setcap:
+	@if [ ! -f $(BUILD_DIR)/netmon ]; then \
+		echo "Error: $(BUILD_DIR)/netmon not found. Run 'make' first."; \
+		exit 1; \
+	fi
+	sudo setcap cap_net_raw=eip $(BUILD_DIR)/netmon
+	@echo "Capabilities successfully verified:"
+	@getcap $(BUILD_DIR)/netmon
+
 
 clean:
 	@if [ -d $(BUILD_DIR) ] && [ -f $(BUILD_DIR)/Makefile ]; then \
