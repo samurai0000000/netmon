@@ -21,6 +21,7 @@ struct InterfaceState {
     std::string ifName;
     std::string ifDescr;
     std::string ifAlias;
+    std::string ipAddress;
     uint32_t    ifType = 0;
     uint64_t    ifSpeed = 0;
     int         operStatus = 1;

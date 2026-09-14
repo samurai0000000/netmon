@@ -1,12 +1,14 @@
 /*
- * app.js — NetMon Real-Time Client & Canvas Bandwidth Grapher
+ * app.js — netmon Real-Time Client & Canvas Bandwidth Grapher
  * Copyright (C) 2026, Charles Chiou
  */
 
 (function() {
     let currentWindowHours = 24;
     let allDevices = [];
-    const canvasCharts = {}; // Map ifName -> canvas context and historical cache
+    let sortColumn = 'ip';
+    let sortDirection = 'asc';
+    const canvasCharts = {}; // Map ifName -> chart context, points, and layout cache
 
     // Format helpers
     function formatBytes(bytes) {
@@ -25,7 +27,34 @@
     function formatTime(epochSec) {
         if (!epochSec || epochSec === 0) return '--';
         const d = new Date(epochSec * 1000);
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+
+    function formatAxisTick(epochSec, windowHours) {
+        if (!epochSec) return '';
+        const d = new Date(epochSec * 1000);
+        if (windowHours <= 24) {
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        } else if (windowHours <= 168) {
+            const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            return `${days[d.getDay()]} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+        } else if (windowHours <= 720) {
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            return `${months[d.getMonth()]} ${d.getDate()}`;
+        } else {
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            return `${months[d.getMonth()]} '${String(d.getFullYear()).slice(-2)}`;
+        }
+    }
+
+    function ipToLong(ip) {
+        if (!ip) return 0;
+        const parts = ip.split('.');
+        if (parts.length !== 4) return 0;
+        return ((parseInt(parts[0], 10) || 0) << 24) +
+               ((parseInt(parts[1], 10) || 0) << 16) +
+               ((parseInt(parts[2], 10) || 0) << 8) +
+               ((parseInt(parts[3], 10) || 0));
     }
 
     // Initialize Timeframe Buttons
@@ -44,6 +73,38 @@
     if (searchInput) {
         searchInput.addEventListener('input', (e) => {
             renderDevices(e.target.value.toLowerCase().trim());
+        });
+    }
+
+    // Device Table Column Sorting
+    const sortHeaders = document.querySelectorAll('.data-table th.sortable');
+    sortHeaders.forEach(th => {
+        th.addEventListener('click', () => {
+            const col = th.getAttribute('data-sort');
+            if (sortColumn === col) {
+                sortDirection = (sortDirection === 'asc') ? 'desc' : 'asc';
+            } else {
+                sortColumn = col;
+                sortDirection = (col === 'last_seen') ? 'desc' : 'asc';
+            }
+            updateSortHeaders();
+            renderDevices(searchInput ? searchInput.value.toLowerCase().trim() : '');
+        });
+    });
+
+    function updateSortHeaders() {
+        sortHeaders.forEach(th => {
+            const col = th.getAttribute('data-sort');
+            const icon = th.querySelector('.sort-icon');
+            if (col === sortColumn) {
+                th.classList.add('active-sort');
+                th.classList.remove('asc', 'desc');
+                th.classList.add(sortDirection);
+                if (icon) icon.textContent = sortDirection === 'asc' ? '▲' : '▼';
+            } else {
+                th.classList.remove('active-sort', 'asc', 'desc');
+                if (icon) icon.textContent = '';
+            }
         });
     }
 
@@ -118,7 +179,17 @@
                                     </svg>
                                     ${wan.interface.toUpperCase()}
                                 </h3>
-                                <span class="wan-alias">${wan.alias || 'Internet Uplink'}</span>
+                                <div class="wan-sub-info">
+                                    <span class="wan-alias">${wan.alias || 'Internet Uplink'}</span>
+                                    <span class="wan-ip-badge" title="Outward WAN IP">
+                                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+                                            <circle cx="12" cy="12" r="10"></circle>
+                                            <line x1="2" y1="12" x2="22" y2="12"></line>
+                                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                                        </svg>
+                                        <span class="wan-ip-val" id="wan-ip-${wan.interface}">${wan.ip_address || 'No IP'}</span>
+                                    </span>
+                                </div>
                             </div>
                             <span class="link-status-badge ${wan.status === 'up' ? 'status-up' : 'status-down'}">
                                 ${wan.status ? wan.status.toUpperCase() : 'UNKNOWN'} (${wan.speed_mbps || 0}M)
@@ -136,8 +207,9 @@
                             </div>
                         </div>
 
-                        <div class="chart-container">
+                        <div class="chart-container" id="chart-wrap-${wan.interface}">
                             <canvas class="chart-canvas" id="canvas-${wan.interface}"></canvas>
+                            <div class="chart-tooltip" id="tooltip-${wan.interface}"></div>
                         </div>
 
                         <div class="wan-meta-grid">
@@ -179,6 +251,9 @@
                 const avgOutEl = document.getElementById(`avg-out-${wan.interface}`);
                 if (avgOutEl) avgOutEl.textContent = `${formatMbps(wan.avg5min_out_mbps)} Mbps`;
 
+                const ipValEl = document.getElementById(`wan-ip-${wan.interface}`);
+                if (ipValEl) ipValEl.textContent = wan.ip_address || 'No IP';
+
                 const peakInEl = document.getElementById(`peak-in-${wan.interface}`);
                 if (peakInEl) {
                     const peakTime = wan.peak_24h_in_timestamp ? ` @ ${formatTime(wan.peak_24h_in_timestamp)}` : '';
@@ -203,7 +278,8 @@
         try {
             const now = Math.floor(Date.now() / 1000);
             const start = now - (currentWindowHours * 3600);
-            const url = `/api/snmp/history?target_ip=${encodeURIComponent(targetIp)}&iface=${encodeURIComponent(ifName)}&start=${start}&end=${now}&max_points=240`;
+            const maxPts = currentWindowHours > 720 ? 365 : (currentWindowHours > 168 ? 300 : 240);
+            const url = `/api/snmp/history?target_ip=${encodeURIComponent(targetIp)}&iface=${encodeURIComponent(ifName)}&start=${start}&end=${now}&max_points=${maxPts}`;
             const res = await fetch(url);
             if (!res.ok) return;
             const points = await res.json();
@@ -211,13 +287,13 @@
             const canvas = document.getElementById(`canvas-${ifName}`);
             if (!canvas) return;
 
-            drawSmoothAreaChart(canvas, points);
+            drawSmoothAreaChart(canvas, points, start, now, ifName);
         } catch (err) {
             console.error(`Error drawing chart for ${ifName}:`, err);
         }
     }
 
-    function drawSmoothAreaChart(canvas, points) {
+    function drawSmoothAreaChart(canvas, points, startTs, endTs, ifName) {
         const dpr = window.devicePixelRatio || 1;
         const rect = canvas.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) return;
@@ -230,9 +306,9 @@
         const w = rect.width;
         const h = rect.height;
         const padTop = 15;
-        const padBottom = 20;
-        const padLeft = 40;
-        const padRight = 10;
+        const padBottom = 22;
+        const padLeft = 42;
+        const padRight = 14;
         const plotW = w - padLeft - padRight;
         const plotH = h - padTop - padBottom;
 
@@ -271,14 +347,29 @@
             ctx.fillText(yVal.toFixed(1) + 'M', padLeft - 6, yPos + 3);
         }
 
-        // Time axis
-        ctx.textAlign = 'center';
-        const startTs = points[0].timestamp;
-        const endTs = points[points.length - 1].timestamp;
+        // Time axis: 5 ticks anchored to [startTs, endTs] (Right edge = "Now")
         const timeRange = (endTs - startTs) || 1;
+        ctx.fillStyle = '#64748b';
+        ctx.font = '10px JetBrains Mono';
 
-        ctx.fillText(formatTime(startTs), padLeft + 20, h - 5);
-        ctx.fillText(formatTime(endTs), w - padRight - 20, h - 5);
+        for (let i = 0; i <= 4; i++) {
+            const frac = i / 4.0;
+            const tickTs = startTs + Math.round(timeRange * frac);
+            const tickX = padLeft + (plotW * frac);
+
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+            ctx.moveTo(tickX, padTop + plotH);
+            ctx.lineTo(tickX, padTop + plotH + 4);
+            ctx.stroke();
+
+            const label = (i === 4) ? 'Now' : formatAxisTick(tickTs, currentWindowHours);
+            if (i === 0) ctx.textAlign = 'left';
+            else if (i === 4) ctx.textAlign = 'right';
+            else ctx.textAlign = 'center';
+
+            ctx.fillText(label, tickX, h - 6);
+        }
 
         function getX(ts) {
             return padLeft + ((ts - startTs) / timeRange) * plotW;
@@ -287,15 +378,18 @@
             return padTop + plotH - (val / maxRate) * plotH;
         }
 
+        const firstPtX = getX(points[0].timestamp);
+        const lastPtX = getX(points[points.length - 1].timestamp);
+
         // 1. Draw Inbound (Cyan Gradient Area + Line)
         const gradIn = ctx.createLinearGradient(0, padTop, 0, padTop + plotH);
         gradIn.addColorStop(0, 'rgba(0, 242, 254, 0.35)');
         gradIn.addColorStop(1, 'rgba(0, 242, 254, 0.0)');
 
         ctx.beginPath();
-        ctx.moveTo(getX(points[0].timestamp), getY(0));
+        ctx.moveTo(firstPtX, getY(0));
         points.forEach(p => ctx.lineTo(getX(p.timestamp), getY(p.in_mbps)));
-        ctx.lineTo(getX(points[points.length - 1].timestamp), getY(0));
+        ctx.lineTo(lastPtX, getY(0));
         ctx.closePath();
         ctx.fillStyle = gradIn;
         ctx.fill();
@@ -317,9 +411,9 @@
         gradOut.addColorStop(1, 'rgba(139, 92, 246, 0.0)');
 
         ctx.beginPath();
-        ctx.moveTo(getX(points[0].timestamp), getY(0));
+        ctx.moveTo(firstPtX, getY(0));
         points.forEach(p => ctx.lineTo(getX(p.timestamp), getY(p.out_mbps)));
-        ctx.lineTo(getX(points[points.length - 1].timestamp), getY(0));
+        ctx.lineTo(lastPtX, getY(0));
         ctx.closePath();
         ctx.fillStyle = gradOut;
         ctx.fill();
@@ -334,6 +428,129 @@
         ctx.strokeStyle = '#8b5cf6';
         ctx.lineWidth = 1.8;
         ctx.stroke();
+
+        // Cache chart metadata for hover crosshair & tooltip
+        canvasCharts[ifName] = {
+            points,
+            startTs,
+            endTs,
+            timeRange,
+            maxRate,
+            plotW,
+            plotH,
+            padLeft,
+            padTop,
+            padRight,
+            padBottom,
+            w,
+            h,
+            getX,
+            getY
+        };
+
+        setupChartInteractivity(canvas, ifName);
+    }
+
+    function setupChartInteractivity(canvas, ifName) {
+        if (canvas._hasInteractivity) return;
+        canvas._hasInteractivity = true;
+
+        const tooltip = document.getElementById(`tooltip-${ifName}`);
+
+        canvas.addEventListener('mousemove', (e) => {
+            const meta = canvasCharts[ifName];
+            if (!meta || !meta.points || meta.points.length === 0) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            if (mouseX < meta.padLeft || mouseX > meta.w - meta.padRight ||
+                mouseY < meta.padTop || mouseY > meta.padTop + meta.plotH) {
+                if (tooltip) tooltip.style.display = 'none';
+                return;
+            }
+
+            // Find closest data point
+            let closest = meta.points[0];
+            let minDiff = Infinity;
+            meta.points.forEach(p => {
+                const px = meta.getX(p.timestamp);
+                const diff = Math.abs(px - mouseX);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    closest = p;
+                }
+            });
+
+            if (!closest) return;
+
+            // Redraw chart with crosshair
+            const ctx = canvas.getContext('2d');
+            drawSmoothAreaChart(canvas, meta.points, meta.startTs, meta.endTs, ifName);
+
+            const cx = meta.getX(closest.timestamp);
+            const cyIn = meta.getY(closest.in_mbps);
+            const cyOut = meta.getY(closest.out_mbps);
+
+            // Draw vertical dashed line
+            ctx.save();
+            ctx.beginPath();
+            ctx.setLineDash([3, 3]);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.lineWidth = 1;
+            ctx.moveTo(cx, meta.padTop);
+            ctx.lineTo(cx, meta.padTop + meta.plotH);
+            ctx.stroke();
+
+            // Highlight dots
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.arc(cx, cyIn, 4, 0, 2 * Math.PI);
+            ctx.fillStyle = '#00f2fe';
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(cx, cyOut, 4, 0, 2 * Math.PI);
+            ctx.fillStyle = '#8b5cf6';
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.restore();
+
+            // Show tooltip
+            if (tooltip) {
+                const d = new Date(closest.timestamp * 1000);
+                const timeStr = d.toLocaleString([], {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false
+                });
+
+                tooltip.innerHTML = `
+                    <div class="tip-time">${timeStr}</div>
+                    <div class="tip-row tip-in"><span>&#x2193; In:</span> <strong>${formatMbps(closest.in_mbps)} Mbps</strong></div>
+                    <div class="tip-row tip-out"><span>&#x2191; Out:</span> <strong>${formatMbps(closest.out_mbps)} Mbps</strong></div>
+                `;
+                tooltip.style.display = 'block';
+                tooltip.style.left = `${Math.min(Math.max(cx, 80), meta.w - 80)}px`;
+                tooltip.style.top = `${Math.max(Math.min(cyIn, cyOut) - 10, 45)}px`;
+            }
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            const meta = canvasCharts[ifName];
+            if (meta && meta.points) {
+                drawSmoothAreaChart(canvas, meta.points, meta.startTs, meta.endTs, ifName);
+            }
+            if (tooltip) tooltip.style.display = 'none';
+        });
     }
 
     // 4. LAN Traffic
@@ -416,9 +633,9 @@
         const tbody = document.getElementById('devices-tbody');
         if (!tbody) return;
 
-        let filtered = allDevices;
+        let filtered = allDevices.slice();
         if (query) {
-            filtered = allDevices.filter(d => {
+            filtered = filtered.filter(d => {
                 return (d.name && d.name.toLowerCase().includes(query)) ||
                        (d.ip && d.ip.toLowerCase().includes(query)) ||
                        (d.mac && d.mac.toLowerCase().includes(query)) ||
@@ -431,6 +648,21 @@
             tbody.innerHTML = '<tr><td colspan="6" class="text-center">No matching devices found</td></tr>';
             return;
         }
+
+        // Sort records
+        filtered.sort((a, b) => {
+            let cmp = 0;
+            if (sortColumn === 'ip') {
+                cmp = ipToLong(a.ip) - ipToLong(b.ip);
+            } else if (sortColumn === 'last_seen') {
+                cmp = (a.last_seen || 0) - (b.last_seen || 0);
+            } else {
+                const valA = (a[sortColumn] || '').toString().toLowerCase();
+                const valB = (b[sortColumn] || '').toString().toLowerCase();
+                cmp = valA.localeCompare(valB);
+            }
+            return sortDirection === 'asc' ? cmp : -cmp;
+        });
 
         tbody.innerHTML = filtered.map(d => {
             const catClass = `cat-${d.category || 'unregistered'}`;

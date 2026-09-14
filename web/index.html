@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetMon — Real-Time Network & SNMP Telemetry</title>
+    <title>netmon — Real-Time Network & SNMP Telemetry</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -20,7 +20,7 @@
                     </svg>
                 </div>
                 <div class="brand-text">
-                    <h1>NetMon</h1>
+                    <h1>netmon</h1>
                     <span class="subtext">Telemetry & SNMP Gateway</span>
                 </div>
             </div>
@@ -49,10 +49,11 @@
                         <span class="badge-tag">SNMP v2c / 64-bit HC</span>
                     </div>
                     <div class="timeframe-selector">
-                        <button class="time-btn" data-hours="1">1 Hour</button>
-                        <button class="time-btn" data-hours="6">6 Hours</button>
-                        <button class="time-btn active" data-hours="24">24 Hours</button>
-                        <button class="time-btn" data-hours="168">7 Days</button>
+                        <button class="time-btn" data-hours="1">Hour</button>
+                        <button class="time-btn active" data-hours="24">Day</button>
+                        <button class="time-btn" data-hours="168">Week</button>
+                        <button class="time-btn" data-hours="720">Month</button>
+                        <button class="time-btn" data-hours="8760">Year</button>
                     </div>
                 </div>
 
@@ -125,12 +126,12 @@
                     <table class="data-table">
                         <thead>
                             <tr>
-                                <th>Device Name</th>
-                                <th>IPv4 Address</th>
-                                <th>MAC Address</th>
-                                <th>OUI Vendor</th>
-                                <th>Category</th>
-                                <th>Last Seen</th>
+                                <th class="sortable" data-sort="name">Device Name <span class="sort-icon"></span></th>
+                                <th class="sortable active-sort asc" data-sort="ip">IPv4 Address <span class="sort-icon">▲</span></th>
+                                <th class="sortable" data-sort="mac">MAC Address <span class="sort-icon"></span></th>
+                                <th class="sortable" data-sort="vendor">OUI Vendor <span class="sort-icon"></span></th>
+                                <th class="sortable" data-sort="category">Category <span class="sort-icon"></span></th>
+                                <th class="sortable" data-sort="last_seen">Last Seen <span class="sort-icon"></span></th>
                             </tr>
                         </thead>
                         <tbody id="devices-tbody">
@@ -142,7 +143,7 @@
         </main>
 
         <footer class="footer">
-            <span>NetMon v1.0.0 &bull; Copyright &copy; 2026, Charles Chiou &bull; Autonomous AI & Network Telemetry</span>
+            <span>netmon v1.0.0 &bull; Copyright &copy; 2026, Charles Chiou &bull; Autonomous AI & Network Telemetry</span>
         </footer>
     </div>
 

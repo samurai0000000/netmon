@@ -338,6 +338,22 @@ bool SnmpAggregator::walkInterfaces(void *ss, SnmpDeviceState &device) {
                      if (v->val.integer) indexMap[idx].outErrors = static_cast<uint32_t>(*v->val.integer);
                  });
 
+    // 10. Walk ipAdEntIfIndex (1.3.6.1.2.1.4.20.1.2) to discover IPv4 addresses
+    oid oidIpAdEntIfIndex[] = {1, 3, 6, 1, 2, 1, 4, 20, 1, 2};
+    walkOidTable(session, _snmpMutex, oidIpAdEntIfIndex, sizeof(oidIpAdEntIfIndex) / sizeof(oid),
+                 [&](int, struct variable_list *v) {
+                     if (v->val.integer && v->name_length >= 14) {
+                         int ifIdx = static_cast<int>(*v->val.integer);
+                         std::string ip = std::to_string(v->name[10]) + "." +
+                                          std::to_string(v->name[11]) + "." +
+                                          std::to_string(v->name[12]) + "." +
+                                          std::to_string(v->name[13]);
+                         if (indexMap.find(ifIdx) != indexMap.end()) {
+                             indexMap[ifIdx].ipAddress = ip;
+                         }
+                     }
+                 });
+
     // Update state and compute rates keyed by persistent ifName
     std::vector<SnmpSampleRecord> dbBatch;
 
@@ -357,6 +373,16 @@ bool SnmpAggregator::walkInterfaces(void *ss, SnmpDeviceState &device) {
         st.hcOutOctets = scanned.hcOutOctets;
         st.inErrors = scanned.inErrors;
         st.outErrors = scanned.outErrors;
+
+        // Dynamic IP tracking and change detection
+        if (!st.ipAddress.empty() && !scanned.ipAddress.empty() && st.ipAddress != scanned.ipAddress) {
+            std::cout << "SnmpAggregator: Interface " << scanned.ifName
+                      << " IP address changed from " << st.ipAddress
+                      << " to " << scanned.ipAddress << std::endl;
+        }
+        if (!scanned.ipAddress.empty()) {
+            st.ipAddress = scanned.ipAddress;
+        }
 
         if (st.lastSampleTime > 0 && now > st.lastSampleTime) {
             double dt = static_cast<double>(now - st.lastSampleTime);
@@ -500,12 +526,31 @@ json SnmpAggregator::getWanStatus(const std::string &targetIp) {
     res["sys_name"] = dev.sysName;
 
     std::vector<std::string> wanNames = dev.wanInterfaceNames;
+
+    // Prioritize true PPPoE WAN uplinks (ppp11, ppp12) if present on the device
+    bool hasPppWan = (dev.interfaces.find("ppp11") != dev.interfaces.end() ||
+                      dev.interfaces.find("ppp12") != dev.interfaces.end());
+    if (hasPppWan) {
+        bool onlyEth = true;
+        for (const auto &w : wanNames) {
+            if (w.rfind("ppp", 0) == 0) {
+                onlyEth = false;
+                break;
+            }
+        }
+        if (wanNames.empty() || onlyEth) {
+            wanNames.clear();
+            if (dev.interfaces.find("ppp11") != dev.interfaces.end()) wanNames.push_back("ppp11");
+            if (dev.interfaces.find("ppp12") != dev.interfaces.end()) wanNames.push_back("ppp12");
+        }
+    }
+
     if (wanNames.empty()) {
         for (const auto &kv : dev.interfaces) {
             std::string n = kv.second.ifName + " " + kv.second.ifDescr + " " + kv.second.ifAlias;
             std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-            if (n.find("wan") != std::string::npos || n.find("uplink") != std::string::npos ||
-                n.find("internet") != std::string::npos) {
+            if (n.find("ppp") != std::string::npos || n.find("wan") != std::string::npos ||
+                n.find("uplink") != std::string::npos || n.find("internet") != std::string::npos) {
                 wanNames.push_back(kv.second.ifName);
             }
         }
@@ -528,13 +573,30 @@ json SnmpAggregator::getWanStatus(const std::string &targetIp) {
         const auto &st = ifIt->second;
         json w;
         w["interface"] = st.ifName;
-        w["alias"] = st.ifAlias.empty() ? st.ifDescr : st.ifAlias;
+        std::string aliasStr = st.ifAlias.empty() ? st.ifDescr : st.ifAlias;
+        if (aliasStr.empty() || aliasStr == st.ifName) {
+            if (st.ifName == "ppp11") aliasStr = "WAN 1 (PPPoE)";
+            else if (st.ifName == "ppp12") aliasStr = "WAN 2 (PPPoE)";
+        }
+        w["alias"] = aliasStr;
         w["status"] = st.operStatus == 1 ? "up" : "down";
         w["speed_mbps"] = st.ifSpeed / 1000000ULL;
         w["rate_in_mbps"] = (st.rateInBps * 8.0) / 1000000.0;
         w["rate_out_mbps"] = (st.rateOutBps * 8.0) / 1000000.0;
         w["avg5min_in_mbps"] = (st.avg5MinInBps * 8.0) / 1000000.0;
         w["avg5min_out_mbps"] = (st.avg5MinOutBps * 8.0) / 1000000.0;
+
+        // Outward IP resolution with fallback mapping
+        std::string outwardIp = st.ipAddress;
+        if (outwardIp.empty()) {
+            if (st.ifName == "eth1" && dev.interfaces.find("ppp11") != dev.interfaces.end()) {
+                outwardIp = dev.interfaces.at("ppp11").ipAddress;
+            } else if (st.ifName == "eth2" && dev.interfaces.find("ppp12") != dev.interfaces.end()) {
+                outwardIp = dev.interfaces.at("ppp12").ipAddress;
+            }
+        }
+        w["ip_address"] = outwardIp;
+        w["dynamic_ip"] = true;
 
         // Query 24-hour historical statistics from SQLite
         json histStats = SnmpDatabase::getInstance().queryWanStats(dev.targetIp, st.ifName, 24);

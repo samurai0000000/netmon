@@ -228,12 +228,30 @@ json SnmpDatabase::queryHistory(const std::string &targetIp,
     int64_t bucketSec = duration / maxPoints;
     if (bucketSec < 30) bucketSec = 30;
 
+    bool includeRollups = (bucketSec > 30) && (startEpoch < (static_cast<int64_t>(time(nullptr)) - (60 * 86400)));
     std::string sql;
     if (bucketSec <= 30) {
         sql = "SELECT timestamp, in_bytes_sec, out_bytes_sec, oper_status, in_errors, out_errors "
               "FROM snmp_samples "
               "WHERE target_ip = ? AND if_name = ? AND timestamp >= ? AND timestamp <= ? "
               "ORDER BY timestamp ASC;";
+    } else if (includeRollups) {
+        std::ostringstream oss;
+        oss << "SELECT (timestamp / " << bucketSec << ") * " << bucketSec << " AS bucket, "
+            << "AVG(in_bytes_sec), AVG(out_bytes_sec), MIN(oper_status), "
+            << "MAX(in_errors), MAX(out_errors) "
+            << "FROM ("
+            << "  SELECT timestamp, in_bytes_sec, out_bytes_sec, oper_status, in_errors, out_errors "
+            << "  FROM snmp_samples "
+            << "  WHERE target_ip = ? AND if_name = ? AND timestamp >= ? AND timestamp <= ? "
+            << "  UNION ALL "
+            << "  SELECT timestamp, avg_in_bytes AS in_bytes_sec, avg_out_bytes AS out_bytes_sec, 1 AS oper_status, 0 AS in_errors, 0 AS out_errors "
+            << "  FROM snmp_hourly_rollups "
+            << "  WHERE target_ip = ? AND if_name = ? AND timestamp >= ? AND timestamp <= ? "
+            << "    AND timestamp < (SELECT COALESCE(MIN(timestamp), 2147483647) FROM snmp_samples WHERE target_ip = ? AND if_name = ?)"
+            << ") "
+            << "GROUP BY bucket ORDER BY bucket ASC;";
+        sql = oss.str();
     } else {
         std::ostringstream oss;
         oss << "SELECT (timestamp / " << bucketSec << ") * " << bucketSec << " AS bucket, "
@@ -251,6 +269,15 @@ json SnmpDatabase::queryHistory(const std::string &targetIp,
         sqlite3_bind_text(stmt, 2, ifName.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(stmt, 3, startEpoch);
         sqlite3_bind_int64(stmt, 4, endEpoch);
+
+        if (includeRollups) {
+            sqlite3_bind_text(stmt, 5, targetIp.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 6, ifName.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int64(stmt, 7, startEpoch);
+            sqlite3_bind_int64(stmt, 8, endEpoch);
+            sqlite3_bind_text(stmt, 9, targetIp.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 10, ifName.c_str(), -1, SQLITE_TRANSIENT);
+        }
 
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             int64_t ts = sqlite3_column_int64(stmt, 0);

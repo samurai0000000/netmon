@@ -14,7 +14,7 @@ inline constexpr const char* INDEX_HTML = R"rawliteral(<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetMon — Real-Time Network & SNMP Telemetry</title>
+    <title>netmon — Real-Time Network & SNMP Telemetry</title>
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -23,7 +23,7 @@ inline constexpr const char* INDEX_HTML = R"rawliteral(<!DOCTYPE html>
             <div class="brand">
                 <div class="logo-icon">NM</div>
                 <div class="brand-text">
-                    <h1>NetMon</h1>
+                    <h1>netmon</h1>
                     <span class="subtext">Telemetry & SNMP Gateway</span>
                 </div>
             </div>
