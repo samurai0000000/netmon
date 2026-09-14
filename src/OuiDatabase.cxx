@@ -143,9 +143,11 @@ void OuiDatabase::initializeDatabase() {
     _ouiMap["28:cd:c1"] = "Raspberry Pi Foundation";
 
     // Espressif Inc (ESP32 / ESP8266 IoT nodes)
+    _ouiMap["10:20:ba"] = "Espressif Inc (ESP32)";
     _ouiMap["24:0a:c4"] = "Espressif Inc (ESP32)";
     _ouiMap["24:62:ab"] = "Espressif Inc (ESP32)";
     _ouiMap["24:6f:28"] = "Espressif Inc (ESP32)";
+    _ouiMap["24:dc:c3"] = "Espressif Inc (ESP32)";
     _ouiMap["30:ae:a4"] = "Espressif Inc (ESP32)";
     _ouiMap["3c:61:05"] = "Espressif Inc (ESP32)";
     _ouiMap["3c:71:bf"] = "Espressif Inc (ESP32)";
@@ -157,6 +159,7 @@ void OuiDatabase::initializeDatabase() {
     _ouiMap["54:43:b2"] = "Espressif Inc (ESP32)";
     _ouiMap["5c:cf:7f"] = "Espressif Inc (ESP8266)";
     _ouiMap["60:01:94"] = "Espressif Inc (ESP8266)";
+    _ouiMap["64:e8:33"] = "Espressif Inc (ESP32)";
     _ouiMap["68:c6:3a"] = "Espressif Inc (ESP32)";
     _ouiMap["70:03:9f"] = "Espressif Inc (ESP32)";
     _ouiMap["70:b3:d5"] = "Espressif Inc (ESP32)";
@@ -167,17 +170,18 @@ void OuiDatabase::initializeDatabase() {
     _ouiMap["8c:aa:b5"] = "Espressif Inc (ESP32)";
     _ouiMap["94:b5:55"] = "Espressif Inc (ESP32)";
     _ouiMap["94:b9:7e"] = "Espressif Inc (ESP32)";
+    _ouiMap["98:3d:ae"] = "Espressif Inc (ESP32)";
     _ouiMap["a0:20:a6"] = "Espressif Inc (ESP32)";
     _ouiMap["a4:cf:12"] = "Espressif Inc (ESP8266)";
     _ouiMap["a4:e5:7c"] = "Espressif Inc (ESP32)";
     _ouiMap["ac:0b:fb"] = "Espressif Inc (ESP32)";
     _ouiMap["ac:67:b2"] = "Espressif Inc (ESP32)";
-    _ouiMap["b0:c5:54"] = "Espressif Inc (ESP32)";
     _ouiMap["b4:e6:2d"] = "Espressif Inc (ESP32)";
     _ouiMap["bc:dd:c2"] = "Espressif Inc (ESP32)";
     _ouiMap["c4:4f:33"] = "Espressif Inc (ESP32)";
     _ouiMap["c8:2b:96"] = "Espressif Inc (ESP32)";
     _ouiMap["cc:50:e3"] = "Espressif Inc (ESP32)";
+    _ouiMap["d4:8c:49"] = "Espressif Inc (ESP32)";
     _ouiMap["d4:d4:da"] = "Espressif Inc (ESP32)";
     _ouiMap["d8:bc:38"] = "Espressif Inc (ESP32)";
     _ouiMap["dc:4f:22"] = "Espressif Inc (ESP32)";
@@ -203,26 +207,57 @@ void OuiDatabase::initializeDatabase() {
     _ouiMap["00:1c:b3"] = "Apple, Inc.";
     _ouiMap["00:26:08"] = "Apple, Inc.";
     _ouiMap["00:3e:e1"] = "Apple, Inc.";
-    _ouiMap["20:f8:3b"] = "Apple, Inc.";
-    _ouiMap["24:dc:c3"] = "Apple, Inc.";
     _ouiMap["38:c9:86"] = "Apple, Inc.";
-    _ouiMap["3c:2a:f4"] = "Apple, Inc.";
-    _ouiMap["44:eb:2e"] = "Apple, Inc.";
-    _ouiMap["64:e8:33"] = "Apple, Inc.";
     _ouiMap["68:45:cc"] = "Apple, Inc.";
-    _ouiMap["72:3b:0b"] = "Apple, Inc.";
-    _ouiMap["84:c7:ea"] = "Apple, Inc.";
-    _ouiMap["88:ae:dd"] = "Apple, Inc.";
-    _ouiMap["94:45:60"] = "Apple, Inc.";
-    _ouiMap["98:3d:ae"] = "Apple, Inc.";
-    _ouiMap["98:ba:5f"] = "Apple, Inc.";
-    _ouiMap["9c:b8:b4"] = "Apple, Inc.";
-    _ouiMap["a0:ad:9f"] = "Apple, Inc.";
-    _ouiMap["ac:67:84"] = "Apple, Inc.";
-    _ouiMap["ac:80:0a"] = "Apple, Inc.";
-    _ouiMap["b2:f1:3f"] = "Apple, Inc.";
     _ouiMap["b8:3c:28"] = "Apple, Inc.";
-    _ouiMap["d4:8c:49"] = "Apple, Inc.";
+
+    // Google, Inc. (Nest Hub, Smart Displays, Chromecast)
+    _ouiMap["00:1a:11"] = "Google, Inc.";
+    _ouiMap["94:45:60"] = "Google, Inc.";
+    _ouiMap["ac:67:84"] = "Google, Inc.";
+    _ouiMap["d8:6c:63"] = "Google, Inc.";
+    _ouiMap["f4:f5:d8"] = "Google, Inc.";
+
+    // Sony Corporation (Bravia Smart TVs, AV Receivers)
+    _ouiMap["00:01:4a"] = "Sony Corporation";
+    _ouiMap["84:c7:ea"] = "Sony Corporation";
+    _ouiMap["94:db:56"] = "Sony Home Entertainment";
+    _ouiMap["ac:80:0a"] = "Sony Corporation";
+    _ouiMap["fc:f1:36"] = "Sony Corporation";
+
+    // Brother Industries, LTD. (Printers)
+    _ouiMap["00:80:77"] = "Brother Industries, LTD.";
+    _ouiMap["30:05:5c"] = "Brother Industries, LTD.";
+    _ouiMap["3c:2a:f4"] = "Brother Industries, LTD.";
+
+    // Nabu Casa, Inc. (Home Assistant)
+    _ouiMap["20:f8:3b"] = "Nabu Casa, Inc.";
+
+    // ALPSALPINE CO., LTD.
+    _ouiMap["44:eb:2e"] = "ALPSALPINE CO,.LTD";
+
+    // EliteGroup Computer Systems (ECS Mini PCs)
+    _ouiMap["00:0a:79"] = "EliteGroup Computer Systems Co., LTD";
+    _ouiMap["88:ae:dd"] = "EliteGroup Computer Systems Co., LTD";
+
+    // AMPAK Technology (IoT Wi-Fi Modules)
+    _ouiMap["9c:b8:b4"] = "AMPAK Technology,Inc.";
+
+    // ASUSTek Computer Inc.
+    _ouiMap["00:1d:60"] = "ASUSTek COMPUTER INC.";
+    _ouiMap["a0:ad:9f"] = "ASUSTek COMPUTER INC.";
+
+    // D-Link International (IP Cameras, Networking)
+    _ouiMap["00:14:d1"] = "D-Link International";
+    _ouiMap["14:d6:4d"] = "D-Link International";
+    _ouiMap["28:10:7b"] = "D-Link International";
+    _ouiMap["b0:c5:54"] = "D-Link International";
+
+    // Hewlett Packard Enterprise (Servers, iLO)
+    _ouiMap["14:02:ec"] = "Hewlett Packard Enterprise";
+    _ouiMap["28:80:23"] = "Hewlett Packard Enterprise";
+    _ouiMap["3c:a8:2a"] = "Hewlett Packard Enterprise";
+    _ouiMap["94:57:a5"] = "Hewlett Packard Enterprise";
 
     // Samsung Electronics
     _ouiMap["00:07:ab"] = "Samsung Electronics";

@@ -21,15 +21,29 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
 - **AI Security Checkpoint & Policy Enforcement**:
   - Hard safety invariants prevent AI agents from blocking essential network infrastructure (default gateway router, local cluster servers, or broadcast ranges).
   - Configurable safety flags (`allow_ai_block_ip`, `allow_ai_raw_exec`) and full audit logging.
+- **Modern SNMP Telemetry Engine (MRTG Replacement)**:
+  - Continuously polls network switches, routers, and gateways every 30 seconds.
+  - Full 64-bit High-Capacity counter support (`ifHCInOctets`/`ifHCOutOctets`) with automatic 32-bit rollover fallback.
+  - `sysUpTime` tracking to detect device reboots and eliminate false delta spikes.
+  - 3-tier interface filtering suppresses virtual, down, and loopback noise, isolating active physical ports and WAN uplinks.
+- **Persistent SQLite Time-Series Database (`SnmpDatabase`)**:
+  - High-performance WAL mode (`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;`).
+  - Retains uncompressed raw 30-second samples for 90 days (`~50 MB` total footprint) for forensic rate spike analysis.
+  - Automated hourly rollups (`snmp_hourly_rollups`) for multi-year trend analysis and capacity planning.
+- **Embedded Web Server & Live Dashboard**:
+  - Built-in asynchronous HTTP server running on port `3884` powered by `cpp-httplib`.
+  - Modern responsive dark-mode web dashboard featuring live dual-WAN canvas throughput meters, LAN protocol gauges, and device inventory.
+  - Complete RESTful JSON API (`/api/status`, `/api/snmp/wan`, `/api/snmp/devices`, `/api/snmp/history`, `/api/traffic`, `/api/devices`).
+  - Dual-mode asset serving: reads live files from `web/` when present, falling back to compiled C++ string literals for standalone single-binary deployment.
 - **MCP Gateway Integration (`aimon`)**:
-  - Dynamically registers network diagnostics and firewall tools with `aimon` over a persistent TCP JSON-RPC 2.0 stream.
+  - Dynamically registers network diagnostics, device discovery, firewall automation, and SNMP telemetry tools with `aimon` over a persistent TCP JSON-RPC 2.0 stream.
 - **Least-Privilege Security Model**:
   - Runs as a standard unprivileged user using Linux POSIX capability (`CAP_NET_RAW`).
   - Omits `CAP_NET_ADMIN` to ensure the process cannot alter routing tables, interface IPs, or host firewall rules.
   - Configuration directory is enforced to `0700` (`drwx------`) and files to `0600` (`-rw-------`).
-  - Supports 12-factor environment variable credential injection (`NETMON_ROUTER_PASSWORD`, `NETMON_ROUTER_USER`).
+  - Supports 12-factor environment variable credential injection (`NETMON_ROUTER_PASSWORD`, `NETMON_ROUTER_USER`, `NETMON_SNMP_*`, `NETMON_DB_*`, `NETMON_WEB_*`).
 - **Interactive Diagnostic Shell**:
-  - Embedded interactive terminal CLI with real-time status and traffic reports.
+  - Embedded interactive terminal CLI with real-time status, device, and traffic reports.
 
 ---
 
@@ -114,7 +128,40 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
 | **`firewall_get_sessions`** | Read | Active router state table / connection sessions. |
 | **`firewall_block_ip`** | Write (Gated) | Drops IP address via router firewall (checked against safety invariants). |
 | **`firewall_unblock_ip`** | Write (Gated) | Removes router drop rule for specified IP. |
-| **`snmp_get_device_metrics`** | Read | SNMP port counters and utilization metrics from switches and access points. |
+| **`snmp_get_wan_status`** | Read | Dedicated dual-WAN uplink rates, 5-min averages, 24-hr peaks, and daily GB transfers. |
+| **`snmp_get_device_metrics`** | Read | SNMP system metrics, uptime, and 3-tier filtered active interfaces. |
+| **`snmp_get_interface_counters`** | Read | Line speeds, 64-bit HC octet counters, and packet error counts for specific ports. |
+| **`snmp_query_oid`** | Read | Direct arbitrary standard MIB or enterprise OID queries. |
+
+---
+
+## Embedded Web Dashboard
+
+`netmon` includes an embedded dark-mode web dashboard running on port `3884` (`http://<host>:3884`), modeled after `aimon` and `meshmon`:
+
+- **Dual-WAN Meters & Canvas Charts**: Visual gauges and high-resolution historical throughput charts powered by the SQLite database.
+- **Protocol Distribution**: Live breakdown of DNS, HTTPS, SSH, HTTP, ARP, Broadcast, Multicast, and ICMP traffic.
+- **Top Talkers**: Real-time identification of highest bandwidth-consuming internal hosts.
+- **Device Inventory**: Searchable, filterable table of discovered devices, vendors, and online states.
+- **RESTful Endpoints**:
+  - `GET /api/status`: Overall daemon health, database size, and subsystem state.
+  - `GET /api/snmp/wan`: Real-time dual-WAN bandwidth rates and 24-hour peaks.
+  - `GET /api/snmp/devices`: Monitored interfaces, link speeds, and octet counters.
+  - `GET /api/snmp/history?iface=<name>&hours=<n>`: Historical time-series points.
+  - `GET /api/traffic`: LAN packet rates and protocol distribution.
+  - `GET /api/devices`: Discovered device inventory and vendor mappings.
+
+---
+
+## Automated Device Classification & Taxonomy Engine
+
+`netmon` combines hardware OUI vendor discovery with local network telemetry to classify devices into operational categories without manual configuration:
+
+- **Asynchronous MAC OUI Resolution (`MacVendorResolver`)**: Observed MAC prefixes are queried asynchronously against public IEEE registries via `api.maclookup.app` (HTTPS) and cached permanently in `netmon_telemetry.db` (`oui_cache` table) with graceful offline fallback to `OuiDatabase`.
+- **Deterministic Hardware Taxonomy (`VendorTaxonomy`)**: Maps manufacturers into standardized operational categories (`infrastructure`, `iot`, `known`, `visitor`, `unregistered`) based on hardware specialization (e.g. D-Link cameras, Espressif sensors, and Google Nest Hubs &rarr; `iot`; HPE servers and Xen hypervisors &rarr; `infrastructure`).
+- **Authoritative Reverse DNS (`DnsResolver`)**: Non-blocking background worker queries local reverse DNS PTR records (`getnameinfo`), validates IP consistency via forward confirmation (`getaddrinfo`), and strips local search domains (`.selfso.com`) to assign canonical friendly hostnames.
+- **Passive DHCP Option 12 Sniffing (`LanSniffer`)**: Captures hostnames announced in DHCP requests on UDP ports 67/68 for dynamic guest clients where PTR records are absent.
+- **Guest Subnet Topology Isolation**: Enforces guest network semantics (`192.168.11.0/24`), ensuring visitor mobile devices remain categorized as `visitor`.
 
 ---
 
@@ -128,16 +175,19 @@ To build and run `netmon`:
   - `libpcap-dev`
   - `libconfig++-dev`
   - `libsnmp-dev`
+  - `libsqlite3-dev`
+  - `libssl-dev`
   - `libssh2-1-dev`
   - `pkg-config`
 - **Submodules** (managed under `third_party/`):
   - `third_party/json` (nlohmann/json)
+  - `third_party/cpp-httplib` (yhirose/cpp-httplib)
 
 ### Installing Build Dependencies (Debian / Ubuntu)
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake libpcap-dev libconfig++-dev libsnmp-dev libssh2-1-dev pkg-config
+sudo apt install -y build-essential cmake libpcap-dev libconfig++-dev libsnmp-dev libsqlite3-dev libssl-dev libssh2-1-dev pkg-config
 ```
 
 ---
@@ -296,7 +346,35 @@ devices_file = "~/.config/netmon/devices.cfg";
 log_level = "info";
 allow_ai_block_ip = false;
 allow_ai_raw_exec = false;
+
+web = {
+    enabled = true;
+    port = 3884;
+    bind_address = "0.0.0.0";
+};
+
+snmp = {
+    poll_interval_sec = 30;
+    targets = (
+        {
+            name = "gateway";
+            ip = "<router-ip>";
+            community = "public";
+            version = "2c";
+            port = 161;
+            wan_interfaces = [ "eth1", "eth2" ];
+        }
+    );
+};
 ```
+
+### Environment Variable Overrides (12-Factor Support)
+
+All parameters can be injected or overridden via environment variables:
+- `NETMON_WEB_PORT` / `NETMON_WEB_ENABLED` / `NETMON_WEB_BIND`
+- `NETMON_SNMP_TARGET` / `NETMON_SNMP_COMMUNITY` / `NETMON_SNMP_VERSION` / `NETMON_SNMP_PORT`
+- `NETMON_DB_PATH` / `NETMON_DB_RETENTION_DAYS`
+- `NETMON_ROUTER_USER` / `NETMON_ROUTER_PASSWORD` / `NETMON_ROUTER_KEY_PATH`
 
 ---
 
@@ -319,7 +397,10 @@ netmon/
 │   ├── OuiDatabase.hxx            # IEEE OUI vendor resolution database
 │   ├── RouterDriver.hxx           # Abstract router/firewall interface
 │   ├── SecurityCheckpoint.hxx     # AI safety invariants and permission gating
-│   ├── SnmpAggregator.hxx         # SNMP metrics interface
+│   ├── SnmpAggregator.hxx         # SNMP metrics engine (64-bit HC counters, 30s poll)
+│   ├── SnmpDatabase.hxx           # SQLite WAL time-series storage & hourly rollups
+│   ├── WebAssets.hxx              # Embedded fallback HTML/CSS/JS string literals
+│   ├── WebServer.hxx              # Asynchronous HTTP server (cpp-httplib)
 │   └── ZyxelDriver.hxx            # Concrete Zyxel USG router driver
 ├── src/
 │   ├── AimonGatewayClient.cxx     # AimonGatewayClient implementation
@@ -331,8 +412,15 @@ netmon/
 │   ├── OuiDatabase.cxx            # OUI database implementation
 │   ├── SecurityCheckpoint.cxx     # Security checkpoint implementation
 │   ├── SnmpAggregator.cxx         # SNMP aggregator implementation
+│   ├── SnmpDatabase.cxx           # SQLite time-series database implementation
+│   ├── WebServer.cxx              # Embedded WebServer & REST API implementation
 │   └── ZyxelDriver.cxx            # Zyxel router driver implementation
+├── web/                           # Embedded web dashboard frontend assets
+│   ├── app.js                     # Live Canvas chart rendering & API polling
+│   ├── index.html                 # Dark-mode dashboard layout
+│   └── style.css                  # Responsive dark-theme styling
 └── third_party/
+    ├── cpp-httplib/               # Git submodule (yhirose/cpp-httplib)
     └── json/                      # Git submodule (nlohmann/json)
 ```
 

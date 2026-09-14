@@ -36,30 +36,29 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
 │                      │                                   │                  │
 │                      ▼                                   ▼                  │
 │  ┌───────────────────────────────────────┐   ┌───────────────────────────┐  │
-│  │ RouterDriver Abstraction Interface    │   │ Live LAN Streaming Sniffer│  │
+│  │ Telemetry & Router Subsystems         │   │ Live LAN Streaming Sniffer│  │
 │  │   ┌────────────────────────────────┐  │   │ (LanSniffer via libpcap)  │  │
-│  │   │ ZyxelDriver (Stub / Unconfig)  │  │   │ - Configurable interface  │  │
+│  │   │ ZyxelDriver (SSH / CLI Driver) │  │   │ - Configurable interface  │  │
 │  │   └────────────────────────────────┘  │   │ - Header-only snaplen(96B)│  │
 │  │   ┌────────────────────────────────┐  │   │ - Zero Raw Packet Storage │  │
-│  │   │ SnmpAggregator (Stub / Unconfig│  │   │ - Stream Feature Extraction│ │
+│  │   │ SnmpAggregator (Active Engine) │  │   │ - Stream Feature Extract  │  │
+│  │   │ - 30s Polling / 64-bit HC      │  │   └─────────────┬─────────────┘  │
+│  │   │ - Reboot & Wrap Detection      │  │                 │                │
+│  │   │ - 3-Tier Interface Filtering   │  │   ┌─────────────┴─────────────┐  │
+│  │   └───────────────┬────────────────┘  │   │ In-Memory Sliding Windows │  │
+│  │                   ▼                   │   │ - 60-Minute Circular Ring │  │
+│  │   ┌────────────────────────────────┐  │   │ - Top talkers & rates     │  │
+│  │   │ SnmpDatabase (SQLite WAL Mode) │  │   │ - Protocol distributions  │  │
+│  │   │ - 90-Day Raw 30s Retention     │  │   │ - Host Behavioral Metrics │  │
+│  │   │ - Multi-Year Hourly Rollups    │  │   └─────────────┬─────────────┘  │
+│  │   └───────────────┬────────────────┘  │                 │                │
+│  │                   ▼                   │   ┌─────────────▼─────────────┐  │
+│  │   ┌────────────────────────────────┐  │   │ Persistent DeviceRegistry │  │
+│  │   │ WebServer (cpp-httplib :3884)  │  │   │ (devices.cfg / DNS PTR)   │  │
+│  │   │ - Live Dual-WAN Canvas Charts  │  │   │ - Known / Visitor / New   │  │
+│  │   │ - REST API (/api/snmp/*)       │  │   │ - OUI Vendor Match        │  │
 │  │   └────────────────────────────────┘  │   └─────────────┬─────────────┘  │
 │  └───────────────────┬───────────────────┘                 │                │
-│                      │                       ┌─────────────┴─────────────┐  │
-│                      │                       │ In-Memory Sliding Windows │  │
-│                      │                       │ - 60-Minute Circular Ring │  │
-│                      │                       │ - Top talkers & rates     │  │
-│                      │                       │ - Protocol distributions  │  │
-│                      │                       │ - Host Behavioral Metrics │  │
-│                      │                       └─────────────┬─────────────┘  │
-│                      │                                     │                │
-│                      │                       ┌─────────────▼─────────────┐  │
-│                      │                       │ Persistent DeviceRegistry │  │
-│                      │                       │ (libconfig++ storage in   │  │
-│                      │                       │  ~/.config/netmon/        │  │
-│                      │                       │  devices.cfg)             │  │
-│                      │                       │ - Known / Visitor / New   │  │
-│                      │                       │ - OUI Vendor Identification│ │
-│                      │                       └─────────────┬─────────────┘  │
 │                      │                                     │                │
 │  ┌───────────────────┴─────────────────────────────────────┴─────────────┐  │
 │  │                  AimonGatewayClient (TCP Client)                      │  │
@@ -157,11 +156,19 @@ Following the proven persistence model in `meshmon`, `netmon` uses `libconfig++`
 2. **Human-Readable & Editable**: Standard structured text format (`~/.config/netmon/devices.cfg`), viewable and editable with standard Linux tools (`cat`, `nano`, `vim`), and git-friendly.
 3. **No Database Dependencies**: Eliminates SQLite WAL files, file lock contention over NFS, and database corruption risks.
 
-#### Device Classification Schema
-Every discovered device is categorized into one of three operational tiers:
-1. **`Known / Infrastructure`**: Fixed infrastructure defined in `devices.cfg` (servers, routers, workstations, fixed IoT).
-2. **`Visitor / Guest`**: Mobile phones, tablets, or visitor laptops (recognized by vendor OUI like Apple, Samsung, Google Pixel, or assigned to the guest WiFi VLAN `192.168.11.x`).
-3. **`Unregistered`**: Newly observed MAC addresses awaiting identification.
+#### Device Classification & Taxonomy Schema
+Every discovered device is categorized objectively through a hybrid MAC OUI + DNS architecture into operational tiers:
+1. **`infrastructure`**: Core servers, hypervisors/VMs, routers, firewalls, switches, and embedded SBCs (e.g. HPE, XenSource, Zyxel, Cisco, Ubiquiti, Raspberry Pi).
+2. **`iot`**: IP cameras, microcontrollers, smart home displays, smart TVs, audio systems, and network printers (e.g. D-Link, Espressif, Google Nest, Sony Bravia, Nabu Casa, Brother).
+3. **`known`**: Workstations, desktop PCs, and laptops (e.g. ASUSTek, EliteGroup, Apple on LAN).
+4. **`visitor`**: Client devices on the dedicated guest subnet (`192.168.11.0/24`) or modern mobile devices operating with IEEE 802.3 Locally Administered (LAA) randomized MAC addresses.
+5. **`unregistered`**: Newly attached or unclassified hardware awaiting vendor resolution.
+
+#### Automated Identification Pipeline
+- **MAC Vendor Resolution (`MacVendorResolver`)**: Discovered OUIs are queried asynchronously against public IEEE registries via `api.maclookup.app` (HTTPS) and cached permanently in `netmon_telemetry.db` (`oui_cache` table) with fallback to embedded `OuiDatabase`.
+- **Vendor Taxonomy Mapping (`VendorTaxonomy`)**: Infers category deterministically from hardware manufacturer specialization, eliminating brittle hostname regex rules.
+- **Authoritative Reverse DNS (`DnsResolver`)**: Performs non-blocking PTR lookups (`getnameinfo`), strips search domain suffixes (`.selfso.com`), and validates IP consistency via forward confirmation (`getaddrinfo`) to assign canonical hostnames.
+- **Passive DHCP Option 12 Sniffing (`LanSniffer`)**: Captures self-announced client hostnames (e.g. mobile phones on guest WiFi) where static DNS PTR records are absent.
 
 #### Sample `~/.config/netmon/devices.cfg`
 ```libconfig
@@ -170,46 +177,80 @@ Every discovered device is categorized into one of three operational tiers:
 devices = (
     {
         mac = "02:00:00:00:00:01";
-        ip = "192.168.8.1";
+        ip = "192.168.1.1";
         name = "gateway";
         vendor = "Network Gateway";
         category = "infrastructure";
-        first_seen = 1788594000;
-        last_seen = 1789236300;
+        source = "dns_ptr";
+        first_seen = 1788594000L;
+        last_seen = 1789236300L;
     },
     {
         mac = "02:00:00:00:00:02";
-        ip = "192.168.8.39";
-        name = "server_node";
-        vendor = "Virtual Machine NIC";
-        category = "infrastructure";
-        first_seen = 1788594000;
-        last_seen = 1789236300;
+        ip = "192.168.1.50";
+        name = "ipcam-salon";
+        vendor = "D-Link International";
+        category = "iot";
+        source = "dns_ptr";
+        first_seen = 1788594000L;
+        last_seen = 1789236300L;
     },
     {
         mac = "02:00:00:00:00:03";
-        ip = "192.168.8.215";
-        name = "mobile_client";
+        ip = "192.168.11.2";
+        name = "guest_phone";
         vendor = "Mobile Device";
         category = "visitor";
-        first_seen = 1789230000;
-        last_seen = 1789236310;
+        source = "dhcp_opt12";
+        first_seen = 1789230000L;
+        last_seen = 1789236310L;
     }
 );
 ```
 
 ---
 
-### 3.4 Decoupled Hardware Drivers & Clean Stubs
+---
 
-To ensure `netmon` compiles, connects to `aimon`, and functions immediately without requiring external credentials:
-- **`RouterDriver` & `ZyxelDriver`**: Defined as clean abstract interfaces. Unimplemented methods return structured `"Driver unconfigured in netmon.cfg"` messages over MCP.
-- **`SnmpAggregator`**: Defined as a clean abstract interface. Unimplemented methods return `"No SNMP targets configured"`.
-- Concrete SSH commands for Zyxel and SNMP OIDs will be implemented when hardware details are provided, with zero impact on the sniffer or gateway architecture.
+### 3.4 SNMP Telemetry Aggregator (MRTG Replacement Engine)
+
+`SnmpAggregator` provides asynchronous, high-resolution polling against network switches, routers, and gateways:
+- **Net-SNMP Async Engine**: Background thread polls configured targets at configurable cadences (default: 30s).
+- **64-bit High-Capacity (`ifXTable`) Counters**: Supports `ifHCInOctets` and `ifHCOutOctets` with seamless 32-bit rollover fallback for legacy ports.
+- **Router Reboot & Wrap Detection**: Continuously checks `sysUpTime`. When a target router reboots and counter resets to 0, rate calculations automatically discard the interval, preventing false petabyte spikes.
+- **Smart 3-Tier Interface Filtering**: Suppresses noise from loopback (`lo`), virtual interfaces (`docker*`, `virbr*`, `veth*`), and inactive/down ports, exposing only verified physical uplinks and configured WAN ports.
+- **Sub-Millisecond In-Memory Caching**: Thread-safe in-memory cache responds instantaneously to AI MCP tool queries without blocking on network round-trips.
 
 ---
 
-### 3.5 AI Security Checkpoint & Policy
+### 3.5 Persistent SQLite Time-Series Database (`SnmpDatabase`)
+
+`SnmpDatabase` provides resilient, zero-loss local time-series storage:
+- **SQLite WAL Mode**: Configured with `PRAGMA journal_mode=WAL;` and `PRAGMA synchronous=NORMAL;` for minimal I/O overhead and lock-free concurrent reads while polling threads write.
+- **`snmp_samples` Table**: Records uncompressed 30-second telemetry data points (`timestamp`, `target_ip`, `if_name`, `in_bytes_sec`, `out_bytes_sec`, `in_hc_octets`, `out_hc_octets`, `oper_status`, `in_errors`, `out_errors`). Indexed on `(target_ip, if_name, timestamp)`.
+- **90-Day Raw Retention**: Retains full uncompressed granularity for 90 days (`~50 MB` total database footprint) for forensic spike and outage analysis.
+- **`snmp_hourly_rollups` Table**: Automatically rolls up older samples into hourly min/avg/max/total throughput statistics, enabling multi-year capacity planning and 95th-percentile billing analysis with `< 1 MB` storage per year.
+
+---
+
+### 3.6 Embedded HTTP Web Server & Live Dashboard (`WebServer`)
+
+`WebServer` embeds `cpp-httplib` to host a standalone, dark-mode web monitoring dashboard on port `3884`:
+- **Dual-WAN Live Telemetry**: Visual gauges and responsive Canvas area charts displaying live and historical transfer rates.
+- **Traffic Protocol Breakdown**: Live distribution of DNS, HTTPS, SSH, HTTP, ARP, Broadcast, Multicast, and ICMP traffic.
+- **Top Talkers & Device Inventory**: Searchable inventory table displaying discovered devices, friendly names, vendors, categories, and last seen timestamps.
+- **Dual-Mode Asset Serving**: Dynamically serves live assets from `web/` when developing, falling back to compiled C++ string literals in `WebAssets.hxx` for zero-dependency binary distribution.
+- **RESTful Endpoints**:
+  - `GET /api/status`: Subsystem status, database size, and device counts.
+  - `GET /api/snmp/wan`: Dual-WAN uplink metrics, 24-hour peaks, and daily GB totals.
+  - `GET /api/snmp/devices`: 3-tier filtered interface metrics and switch counters.
+  - `GET /api/snmp/history?iface=<name>&hours=<n>`: Time-series historical data.
+  - `GET /api/traffic`: LAN packet rates and protocol distribution.
+  - `GET /api/devices`: Complete device inventory with vendor mappings.
+
+---
+
+### 3.7 AI Security Checkpoint & Policy
 
 The `SecurityCheckpoint` enforces hard safety boundaries on all AI agent invocations:
 1. **Protected Invariant IPs**: Prevents blocking gateway router, core cluster servers, or loopback/broadcast addresses.
@@ -231,7 +272,10 @@ The `SecurityCheckpoint` enforces hard safety boundaries on all AI agent invocat
 | **`firewall_get_sessions`** | **Stub** | Queries active firewall session table (currently stubbed). |
 | **`firewall_block_ip`** | **Stub (Gated)** | Inserts a firewall drop rule, validated against protected subnets (currently stubbed). |
 | **`firewall_unblock_ip`** | **Stub (Gated)** | Removes a firewall drop rule (currently stubbed). |
-| **`snmp_get_device_metrics`** | **Stub** | Returns switch/AP interface metrics (currently stubbed: *"No SNMP targets configured"*). |
+| **`snmp_get_wan_status`** | **Active** | Dedicated dual-WAN uplink bandwidth rates, 5-minute averages, 24-hour peaks, and daily GB transfers. |
+| **`snmp_get_device_metrics`** | **Active** | SNMP metrics, system description, uptime, and 3-tier filtered interfaces for switches and routers. |
+| **`snmp_get_interface_counters`** | **Active** | Line speeds, 64-bit HC octet counters, and packet error counts for specific ports. |
+| **`snmp_query_oid`** | **Active** | Direct arbitrary standard MIB or enterprise OID queries. |
 
 ---
 

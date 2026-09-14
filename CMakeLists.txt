@@ -53,12 +53,18 @@ pkg_check_modules(CONFIGPP REQUIRED libconfig++)
 pkg_check_modules(PCAP REQUIRED libpcap)
 pkg_check_modules(NETSNMP REQUIRED netsnmp)
 pkg_check_modules(SQLITE3 REQUIRED sqlite3)
+pkg_check_modules(OPENSSL REQUIRED openssl)
+
+add_compile_definitions(CPPHTTPLIB_OPENSSL_SUPPORT)
 
 # Source files
 set(SOURCES
     src/Main.cxx
     src/Config.cxx
     src/OuiDatabase.cxx
+    src/MacVendorResolver.cxx
+    src/VendorTaxonomy.cxx
+    src/DnsResolver.cxx
     src/DeviceRegistry.cxx
     src/LanSniffer.cxx
     src/ZyxelDriver.cxx
@@ -81,6 +87,7 @@ target_include_directories(netmon PRIVATE
     ${PCAP_INCLUDE_DIRS}
     ${NETSNMP_INCLUDE_DIRS}
     ${SQLITE3_INCLUDE_DIRS}
+    ${OPENSSL_INCLUDE_DIRS}
 )
 
 target_link_libraries(netmon PRIVATE
@@ -89,6 +96,7 @@ target_link_libraries(netmon PRIVATE
     ${PCAP_LIBRARIES}
     ${NETSNMP_LIBRARIES}
     ${SQLITE3_LIBRARIES}
+    ${OPENSSL_LIBRARIES}
 )
 
 if(CONFIGPP_LIBRARY_DIRS)
@@ -102,4 +110,7 @@ if(NETSNMP_LIBRARY_DIRS)
 endif()
 if(SQLITE3_LIBRARY_DIRS)
     target_link_directories(netmon PRIVATE ${SQLITE3_LIBRARY_DIRS})
+endif()
+if(OPENSSL_LIBRARY_DIRS)
+    target_link_directories(netmon PRIVATE ${OPENSSL_LIBRARY_DIRS})
 endif()

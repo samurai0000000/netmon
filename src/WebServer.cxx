@@ -202,6 +202,19 @@ void WebServer::setupRoutes() {
     // 5. LAN Traffic Summary API
     _server->Get("/api/traffic", [](const httplib::Request &, httplib::Response &res) {
         json j = LanSniffer::getInstance().getTrafficSummary();
+        json tt = LanSniffer::getInstance().getTopTalkers(5, 15);
+        if (tt.contains("top_talkers")) {
+            j["top_talkers"] = tt["top_talkers"];
+        } else {
+            j["top_talkers"] = json::array();
+        }
+        res.set_content(j.dump(), "application/json");
+    });
+
+    _server->Get("/api/traffic/top-talkers", [](const httplib::Request &req, httplib::Response &res) {
+        int limit = req.has_param("limit") ? std::stoi(req.get_param_value("limit")) : 10;
+        int window = req.has_param("window") ? std::stoi(req.get_param_value("window")) : 15;
+        json j = LanSniffer::getInstance().getTopTalkers(limit, window);
         res.set_content(j.dump(), "application/json");
     });
 

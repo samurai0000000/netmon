@@ -530,6 +530,32 @@ void LanSniffer::processPacket(const uint8_t *packet, size_t caplen, size_t orig
             if (dstPort == 53 || srcPort == 53) {
                 _dnsPackets++;
                 srcMetrics.dnsQueryCount++;
+            } else if (dstPort == 67 || dstPort == 68 || srcPort == 67 || srcPort == 68) {
+                _otherPackets++;
+                // Inspect DHCP Option 12 (Host Name) if packet length permits
+                size_t udpPayloadOffset = sizeof(struct ether_header) + ipHdrLen + sizeof(struct udphdr);
+                if (caplen >= udpPayloadOffset + 240) {
+                    const uint8_t *bootp = packet + udpPayloadOffset;
+                    // Magic cookie: 0x63, 0x82, 0x53, 0x63
+                    if (bootp[236] == 0x63 && bootp[237] == 0x82 &&
+                        bootp[238] == 0x53 && bootp[239] == 0x63) {
+                        size_t optIdx = udpPayloadOffset + 240;
+                        while (optIdx < caplen) {
+                            uint8_t optCode = packet[optIdx++];
+                            if (optCode == 0) continue; // Pad
+                            if (optCode == 255) break;  // End
+                            if (optIdx >= caplen) break;
+                            uint8_t optLen = packet[optIdx++];
+                            if (optIdx + optLen > caplen) break;
+
+                            if (optCode == 12 && optLen > 0) { // Option 12: Host Name
+                                std::string dhcpName(reinterpret_cast<const char *>(packet + optIdx), optLen);
+                                DeviceRegistry::getInstance().onDhcpHostnameSniffed(srcMac, dhcpName);
+                            }
+                            optIdx += optLen;
+                        }
+                    }
+                }
             } else {
                 _otherPackets++;
             }
@@ -610,6 +636,9 @@ nlohmann::json LanSniffer::getTopTalkers(size_t limit, int windowMinutes) const 
         item["vendor"] = hasDev ? dev.vendor : OuiDatabase::getInstance().lookup(mac);
         item["category"] = hasDev ? dev.category : "unregistered";
         item["window_bytes"] = hosts[i].bytes;
+        item["bytes_total"] = hosts[i].bytes;
+        double rateMbps = (hosts[i].bytes * 8.0) / (std::max(1, windowMinutes) * 60.0 * 1000000.0);
+        item["rate_mbps"] = rateMbps;
 
         auto it = _hostMetrics.find(mac);
         if (it != _hostMetrics.end()) {
@@ -691,6 +720,7 @@ nlohmann::json LanSniffer::getDevicesJson() const {
     auto devices = DeviceRegistry::getInstance().getAllDevices();
 
     size_t infraCount = 0;
+    size_t iotCount = 0;
     size_t knownCount = 0;
     size_t visitorCount = 0;
     size_t unregCount = 0;
@@ -698,6 +728,7 @@ nlohmann::json LanSniffer::getDevicesJson() const {
     nlohmann::json devList = nlohmann::json::array();
     for (const auto &dev : devices) {
         if (dev.category == "infrastructure") infraCount++;
+        else if (dev.category == "iot") iotCount++;
         else if (dev.category == "known") knownCount++;
         else if (dev.category == "visitor") visitorCount++;
         else unregCount++;
@@ -708,6 +739,7 @@ nlohmann::json LanSniffer::getDevicesJson() const {
         d["name"] = dev.name;
         d["vendor"] = dev.vendor;
         d["category"] = dev.category;
+        d["source"] = DeviceRegistry::nameSourceToString(dev.nameSource);
         d["first_seen"] = dev.firstSeen;
         d["last_seen"] = dev.lastSeen;
         devList.push_back(d);
@@ -716,6 +748,7 @@ nlohmann::json LanSniffer::getDevicesJson() const {
     nlohmann::json result;
     result["total_devices"] = devices.size();
     result["infrastructure_count"] = infraCount;
+    result["iot_count"] = iotCount;
     result["known_count"] = knownCount;
     result["visitor_count"] = visitorCount;
     result["unregistered_count"] = unregCount;

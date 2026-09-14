@@ -344,13 +344,33 @@
             const data = await res.json();
 
             const curRateEl = document.getElementById('lan-current-rate');
-            if (curRateEl && data.current_rate_mbps !== undefined) {
-                curRateEl.innerHTML = `${formatMbps(data.current_rate_mbps)} <span class="unit">Mbps</span>`;
+            const rateMbps = data.current_rate_mbps !== undefined ? data.current_rate_mbps :
+                (data.current_bytes_per_sec ? (data.current_bytes_per_sec * 8 / 1000000) : 0);
+            if (curRateEl) {
+                curRateEl.innerHTML = `${formatMbps(rateMbps)} <span class="unit">Mbps</span>`;
             }
 
             const totalPacketsEl = document.getElementById('lan-total-packets');
             if (totalPacketsEl && data.total_packets) {
                 totalPacketsEl.textContent = data.total_packets.toLocaleString();
+            }
+
+            // Protocol breakdown
+            const protoBar = document.getElementById('protocol-bar');
+            if (protoBar && data.protocols) {
+                const p = data.protocols;
+                const total = (p.https || 0) + (p.ssh || 0) + (p.dns || 0) + (p.arp || 0) + (p.other || 0) + (p.http || 0) || 1;
+                const httpsPct = (((p.https || 0) / total) * 100).toFixed(1);
+                const sshPct = (((p.ssh || 0) / total) * 100).toFixed(1);
+                const dnsPct = (((p.dns || 0) / total) * 100).toFixed(1);
+                const otherPct = Math.max(0, (100 - parseFloat(httpsPct) - parseFloat(sshPct) - parseFloat(dnsPct))).toFixed(1);
+
+                protoBar.innerHTML = `
+                    <div class="proto-segment proto-https" style="width: ${httpsPct}%" title="HTTPS: ${httpsPct}%"></div>
+                    <div class="proto-segment proto-ssh" style="width: ${sshPct}%" title="SSH: ${sshPct}%"></div>
+                    <div class="proto-segment proto-dns" style="width: ${dnsPct}%" title="DNS: ${dnsPct}%"></div>
+                    <div class="proto-segment proto-other" style="width: ${otherPct}%" title="Other: ${otherPct}%"></div>
+                `;
             }
 
             // Top talkers list

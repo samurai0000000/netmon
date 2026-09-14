@@ -13,12 +13,20 @@
 #include <mutex>
 #include <ctime>
 
+enum class NameSource {
+    MANUAL,       // Explicitly named by operator or via lan_name_device (immutable)
+    DNS_PTR,      // Authoritative reverse DNS PTR record
+    DHCP_OPT12,   // Passive DHCP Option 12 hostname sniffing
+    OUI_FALLBACK  // Unknown / unassigned fallback
+};
+
 struct DeviceInfo {
     std::string mac;
     std::string ip;
     std::string name;
     std::string vendor;
-    std::string category; // "infrastructure", "known", "visitor", "unregistered"
+    std::string category; // "infrastructure", "iot", "known", "visitor", "unregistered"
+    NameSource  nameSource = NameSource::OUI_FALLBACK;
     time_t      firstSeen = 0;
     time_t      lastSeen = 0;
 };
@@ -30,18 +38,31 @@ public:
     bool load(const std::string &customPath = "");
     bool save();
 
+    void initEnrichment();
+    void scrubLegacyVisitorPhoneNames();
+
     bool upsertDevice(const std::string &mac, const std::string &ip = "");
     bool nameDevice(const std::string &mac, const std::string &name,
                     const std::string &category = "");
 
+    void onVendorResolved(const std::string &mac, const std::string &vendor);
+    void onDnsResolved(const std::string &mac, const std::string &ip,
+                       const std::string &hostname, bool forwardConfirmed);
+    void onDhcpHostnameSniffed(const std::string &mac, const std::string &hostname);
+
     bool getDevice(const std::string &mac, DeviceInfo &outDevice) const;
     std::vector<DeviceInfo> getAllDevices() const;
+    std::vector<DeviceInfo> getIotDevices() const;
+    std::vector<DeviceInfo> getInfrastructureDevices() const;
     std::vector<DeviceInfo> getUnregisteredDevices() const;
     std::vector<DeviceInfo> getVisitorDevices() const;
     std::vector<DeviceInfo> getKnownDevices() const;
 
     size_t getDeviceCount() const;
     const std::string &getFilePath() const;
+
+    static std::string nameSourceToString(NameSource source);
+    static NameSource stringToNameSource(const std::string &str);
 
 private:
     DeviceRegistry();

@@ -18,6 +18,8 @@
 #include "SnmpAggregator.hxx"
 #include "WebServer.hxx"
 #include "AimonGatewayClient.hxx"
+#include "MacVendorResolver.hxx"
+#include "DnsResolver.hxx"
 #include "NetMonShell.hxx"
 
 static volatile sig_atomic_t g_shutdownRequested = 0;
@@ -30,6 +32,8 @@ static void signalHandler(int sig) {
     NetMonShell::getInstance().stop();
     LanSniffer::getInstance().stop();
     AimonGatewayClient::getInstance().stop();
+    DnsResolver::getInstance().stop();
+    MacVendorResolver::getInstance().stop();
 }
 
 static void printUsage(const char *progName) {
@@ -149,6 +153,8 @@ int main(int argc, char **argv) {
         std::cout << std::endl;
 
         NetMonShell::getInstance().executeCommand("status");
+        DnsResolver::getInstance().waitUntilDone(1000);
+        MacVendorResolver::getInstance().waitUntilDone(500);
         NetMonShell::getInstance().executeCommand("devices");
         return 0;
     }
@@ -188,6 +194,8 @@ int main(int argc, char **argv) {
     SnmpAggregator::getInstance().stop();
     LanSniffer::getInstance().stop();
     AimonGatewayClient::getInstance().stop();
+    DnsResolver::getInstance().stop();
+    MacVendorResolver::getInstance().stop();
 
     WebServer::getInstance().join();
     SnmpAggregator::getInstance().join();
