@@ -32,6 +32,7 @@ Config::Config()
     _webConfig.enabled = true;
     _webConfig.port = 3884;
     _webConfig.bindAddress = "0.0.0.0";
+    _webConfig.endpointsEnabled = false;
 }
 
 std::string Config::resolveHomePath(const std::string &path) {
@@ -102,6 +103,7 @@ bool Config::load(const std::string &customPath) {
             webSetting.lookupValue("enabled", _webConfig.enabled);
             webSetting.lookupValue("port", _webConfig.port);
             webSetting.lookupValue("bind_address", _webConfig.bindAddress);
+            webSetting.lookupValue("endpoints_enabled", _webConfig.endpointsEnabled);
         } catch (const libconfig::SettingNotFoundException &) {
         }
     }
@@ -172,6 +174,11 @@ bool Config::load(const std::string &customPath) {
     }
     const char *envWebBind = getenv("NETMON_WEB_BIND");
     if (envWebBind && *envWebBind) _webConfig.bindAddress = envWebBind;
+    const char *envWebEndpoints = getenv("NETMON_WEB_ENDPOINTS_ENABLED");
+    if (envWebEndpoints && *envWebEndpoints) {
+        std::string s(envWebEndpoints);
+        _webConfig.endpointsEnabled = (s == "1" || s == "true" || s == "TRUE" || s == "yes");
+    }
 
     const char *envSnmpTarget = getenv("NETMON_SNMP_TARGET");
     if (envSnmpTarget && *envSnmpTarget) {

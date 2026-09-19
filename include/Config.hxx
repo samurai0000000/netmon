@@ -27,6 +27,7 @@ struct WebConfig {
     bool enabled = true;
     int port = 3884;
     std::string bindAddress = "0.0.0.0";
+    bool endpointsEnabled = false;
 };
 
 class Config {

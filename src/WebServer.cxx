@@ -18,6 +18,9 @@
 #include <fstream>
 #include <filesystem>
 #include <chrono>
+#include <random>
+#include <sstream>
+#include <iomanip>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -38,6 +41,7 @@ WebServer &WebServer::getInstance() {
 WebServer::WebServer()
     : _bindAddress("0.0.0.0")
     , _port(3884)
+    , _endpointsEnabled(false)
     , _running(false)
     , _server(std::make_unique<httplib::Server>()) {
 }
@@ -45,6 +49,116 @@ WebServer::WebServer()
 WebServer::~WebServer() {
     stop();
     join();
+}
+
+std::string WebServer::createUiSession() {
+    static thread_local std::random_device rd;
+    static thread_local std::mt19937_64 gen(rd());
+    static thread_local std::uniform_int_distribution<uint64_t> dis;
+
+    uint64_t p1 = dis(gen);
+    uint64_t p2 = dis(gen);
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0') << std::setw(16) << p1 << std::setw(16) << p2;
+    std::string token = oss.str();
+
+    std::lock_guard<std::mutex> lock(_sessionMutex);
+    time_t now = time(nullptr);
+    for (auto it = _uiSessions.begin(); it != _uiSessions.end(); ) {
+        if (now - it->second > 86400 * 7) {
+            it = _uiSessions.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    _uiSessions[token] = now;
+    return token;
+}
+
+bool WebServer::isValidUiSession(const httplib::Request &req) const {
+    if (req.has_header("User-Agent")) {
+        std::string ua = req.get_header_value("User-Agent");
+        for (char &c : ua) c = tolower(c);
+        if (ua.find("curl/") != std::string::npos ||
+            ua.find("python") != std::string::npos ||
+            ua.find("wget/") != std::string::npos ||
+            ua.find("httpie") != std::string::npos ||
+            ua.find("aiohttp") != std::string::npos ||
+            ua.find("go-http-client") != std::string::npos) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+
+    std::string token;
+    if (req.has_header("X-UI-Session")) {
+        token = req.get_header_value("X-UI-Session");
+    } else if (req.has_header("Cookie")) {
+        std::string cookie = req.get_header_value("Cookie");
+        size_t pos = cookie.find("netmon_session=");
+        if (pos != std::string::npos) {
+            size_t start = pos + 15;
+            size_t end = cookie.find(';', start);
+            token = (end == std::string::npos) ? cookie.substr(start) : cookie.substr(start, end - start);
+        }
+    }
+
+    if (token.empty()) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(_sessionMutex);
+    auto it = _uiSessions.find(token);
+    if (it != _uiSessions.end()) {
+        time_t now = time(nullptr);
+        if (now - it->second < 86400 * 7) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::string WebServer::getMcpHintForPath(const std::string &path, const std::string &body) {
+    (void)body;
+    if (path == "/api/status") {
+        return "Use official MCP tool 'snmp_get_wan_status' or 'lan_get_traffic_summary'.";
+    }
+    if (path == "/api/snmp/wan") {
+        return "Use official MCP tool 'snmp_get_wan_status'.";
+    }
+    if (path == "/api/snmp/devices") {
+        return "Use official MCP tool 'snmp_get_device_metrics' with argument {\"filter\": \"monitored\"}.";
+    }
+    if (path.find("/stats") != std::string::npos || path.find("/events") != std::string::npos) {
+        return "Use official MCP tool 'snmp_get_device_metrics' with argument {\"filter\": \"all\"}.";
+    }
+    if (path.rfind("/api/snmp", 0) == 0) {
+        return "Use official MCP tool 'snmp_query_oid' or 'snmp_get_interface_counters'.";
+    }
+    if (path == "/api/traffic" || path.rfind("/api/traffic", 0) == 0) {
+        return "Use official MCP tool 'lan_get_top_talkers' or 'lan_get_traffic_summary'.";
+    }
+    if (path == "/api/devices") {
+        return "Use official MCP tool 'lan_get_devices' or 'lan_get_unregistered_devices'.";
+    }
+    if (path == "/api/devices/name") {
+        return "Use official MCP tool 'lan_name_device' with argument {\"mac\": \"...\", \"name\": \"...\"}.";
+    }
+    if (path == "/api/firewall/status") {
+        return "Use official MCP tool 'firewall_get_status'.";
+    }
+    if (path == "/api/firewall/sessions") {
+        return "Use official MCP tool 'firewall_get_sessions'.";
+    }
+    if (path == "/api/firewall/block") {
+        return "Use official MCP tool 'firewall_block_ip' with argument {\"ip\": \"...\"}.";
+    }
+    if (path == "/api/firewall/unblock") {
+        return "Use official MCP tool 'firewall_unblock_ip' with argument {\"ip\": \"...\"}.";
+    }
+    return "Use official MCP tools ('snmp_*', 'lan_*', 'firewall_*'). Direct REST API access is disabled.";
 }
 
 bool WebServer::start(const std::string &bindAddress, int port) {
@@ -63,6 +177,8 @@ bool WebServer::start(const std::string &bindAddress, int port) {
     } else {
         _port = Config::getInstance().getWebConfig().port;
     }
+
+    _endpointsEnabled = Config::getInstance().getWebConfig().endpointsEnabled;
 
     if (!Config::getInstance().getWebConfig().enabled) {
         std::cout << "WebServer: Disabled in configuration" << std::endl;
@@ -99,11 +215,33 @@ int WebServer::getPort() const {
 }
 
 void WebServer::run() {
+    _server->set_read_timeout(1, 0);
+    _server->set_write_timeout(5, 0);
     _server->listen(_bindAddress.c_str(), _port);
     _running.store(false);
 }
 
 void WebServer::setupRoutes() {
+    // Gate REST API endpoints if disabled by configuration, unless request is from an authenticated Web UI session
+    if (!_endpointsEnabled) {
+        _server->set_pre_routing_handler([this](const httplib::Request &req, httplib::Response &res) {
+            if (req.path == "/api" || req.path.rfind("/api/", 0) == 0) {
+                if (!isValidUiSession(req)) {
+                    res.status = 403;
+                    std::string hint = getMcpHintForPath(req.path, req.body);
+                    json err = {
+                        {"error", "Direct REST API endpoint access is disabled by configuration."},
+                        {"hint", hint},
+                        {"daemon", "netmon"}
+                    };
+                    res.set_content(err.dump(2), "application/json");
+                    return httplib::Server::HandlerResponse::Handled;
+                }
+            }
+            return httplib::Server::HandlerResponse::Unhandled;
+        });
+    }
+
     auto serveFileOrFallback = [](const std::string &diskPath,
                                   const char *fallbackAsset,
                                   const std::string &contentType,
@@ -121,8 +259,50 @@ void WebServer::setupRoutes() {
     };
 
     // Static Web Assets
-    _server->Get("/", [serveFileOrFallback](const httplib::Request &, httplib::Response &res) {
-        serveFileOrFallback("web/index.html", assets::INDEX_HTML, "text/html", res);
+    _server->Get("/", [this, serveFileOrFallback](const httplib::Request &, httplib::Response &res) {
+        std::string token = createUiSession();
+        res.set_header("Set-Cookie", "netmon_session=" + token + "; Path=/; SameSite=Strict");
+
+        std::string html;
+        if (fs::exists("web/index.html")) {
+            std::ifstream f("web/index.html");
+            if (f.is_open()) {
+                html = std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            }
+        }
+        if (html.empty()) {
+            html = assets::INDEX_HTML;
+        }
+
+        std::string sessionScript = "<script>\n"
+            "window.__UI_SESSION_TOKEN__ = \"" + token + "\";\n"
+            "(function() {\n"
+            "    const originalFetch = window.fetch;\n"
+            "    window.fetch = function(url, options) {\n"
+            "        options = options || {};\n"
+            "        options.headers = options.headers || {};\n"
+            "        if (window.__UI_SESSION_TOKEN__) {\n"
+            "            if (options.headers instanceof Headers) {\n"
+            "                options.headers.set('X-UI-Session', window.__UI_SESSION_TOKEN__);\n"
+            "            } else if (Array.isArray(options.headers)) {\n"
+            "                options.headers.push(['X-UI-Session', window.__UI_SESSION_TOKEN__]);\n"
+            "            } else {\n"
+            "                options.headers['X-UI-Session'] = window.__UI_SESSION_TOKEN__;\n"
+            "            }\n"
+            "        }\n"
+            "        return originalFetch(url, options);\n"
+            "    };\n"
+            "})();\n"
+            "</script>\n";
+
+        size_t headPos = html.find("</head>");
+        if (headPos != std::string::npos) {
+            html.insert(headPos, sessionScript);
+        } else {
+            html = sessionScript + html;
+        }
+
+        res.set_content(html, "text/html");
     });
 
     _server->Get("/style.css", [serveFileOrFallback](const httplib::Request &, httplib::Response &res) {

@@ -11,9 +11,13 @@
 #include <memory>
 #include <thread>
 #include <atomic>
+#include <map>
+#include <mutex>
 
 namespace httplib {
 class Server;
+class Request;
+class Response;
 }
 
 class WebServer {
@@ -35,11 +39,19 @@ private:
     void setupRoutes();
     void run();
 
+    std::string createUiSession();
+    bool isValidUiSession(const httplib::Request &req) const;
+    static std::string getMcpHintForPath(const std::string &path, const std::string &body);
+
     std::string                      _bindAddress;
     int                              _port;
+    bool                             _endpointsEnabled;
     std::atomic<bool>                _running;
     std::unique_ptr<httplib::Server> _server;
     std::thread                      _thread;
+
+    mutable std::mutex               _sessionMutex;
+    std::map<std::string, time_t>    _uiSessions;
 };
 
 #endif /* NETMON_WEBSERVER_HXX */
