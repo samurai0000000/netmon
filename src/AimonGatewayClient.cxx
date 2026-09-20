@@ -181,6 +181,11 @@ bool AimonGatewayClient::sendRegistration() {
         {"params", {
             {"subsystem", "netmon"},
             {"name", "netmon"},
+            {"display_name", "Network Monitor"},
+            {"short_name", "NetMon"},
+            {"priority", 10},
+            {"web_port", _webPort > 0 ? _webPort : 3884},
+            {"web_path", "/"},
             {"description", "Local Area Network (LAN) monitor, packet sniffer, and firewall telemetry engine"},
             {"tools", json::array({
                 {

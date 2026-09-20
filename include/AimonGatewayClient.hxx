@@ -25,6 +25,8 @@ public:
     bool isConnected() const;
 
     void setRouterDriver(std::shared_ptr<RouterDriver> driver);
+    void setWebPort(uint16_t port) { _webPort = port; }
+    uint16_t getWebPort() const { return _webPort; }
 
 private:
     AimonGatewayClient();
@@ -61,6 +63,7 @@ private:
 
     std::string _host;
     uint16_t _port;
+    uint16_t _webPort = 0;
 
     std::atomic<bool> _running;
     std::atomic<bool> _connected;

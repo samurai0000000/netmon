@@ -176,6 +176,7 @@ int main(int argc, char **argv) {
     AimonGatewayClient::getInstance().setRouterDriver(zyxel);
 
     // Start gateway client to aimon hub
+    AimonGatewayClient::getInstance().setWebPort(WebServer::getInstance().getPort());
     AimonGatewayClient::getInstance().start();
 
     if (mode == "daemon") {
