@@ -52,7 +52,7 @@ static void printUsage(const char *progName) {
               << "Options:\n"
               << "  -c <path>      Path to custom netmon.cfg configuration file (default: ~/.config/netmon/netmon.cfg)\n"
               << "  -i <iface>     Override sniffing network interface (e.g. br0)\n"
-              << "  -g <host>      Override aimon gateway host (default: 192.168.8.39)\n"
+              << "  -g <host>      Override aimon gateway host (default: 127.0.0.1)\n"
               << "  -p <port>      Override aimon gateway port (default: 3885)\n"
               << "  -w <port>      Override web server port (default: 3884)\n"
               << "  --db <path>    Override SQLite database file path\n"

@@ -1246,7 +1246,7 @@ inline constexpr const char* APP_JS = R"rawliteral(
             // Immediately redraw and fetch history for active interfaces
             if (activeWanData && activeWanData.wan_interfaces) {
                 activeWanData.wan_interfaces.forEach(wan => {
-                    fetchAndDrawChart(activeWanData.target_ip || '192.168.8.1', wan.interface);
+                    fetchAndDrawChart(activeWanData.target_ip || '', wan.interface);
                 });
             } else {
                 fetchAll();
@@ -1484,7 +1484,7 @@ inline constexpr const char* APP_JS = R"rawliteral(
                 }
 
                 // Fetch history and draw chart for this interface
-                fetchAndDrawChart(data.target_ip || '192.168.8.1', wan.interface);
+                fetchAndDrawChart(data.target_ip || '', wan.interface);
             });
         } catch (err) {
             console.error('Error fetching WAN telemetry:', err);

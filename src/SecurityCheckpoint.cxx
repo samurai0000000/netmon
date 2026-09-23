@@ -17,18 +17,27 @@ SecurityCheckpoint::SecurityCheckpoint() {
     // Invariant core infrastructure IPs that may NEVER be blocked by any AI agent
     _protectedIps.insert("127.0.0.1");
     _protectedIps.insert("::1");
-    _protectedIps.insert("192.168.8.1");   // Zyxel USG Default Gateway
-    _protectedIps.insert("192.168.8.39");  // builder (AI Hub / MCP gateway)
-    _protectedIps.insert("192.168.8.245"); // fox (meshmon gateway)
-    _protectedIps.insert("192.168.8.30");  // rhino (netmon sniffer host)
     _protectedIps.insert("255.255.255.255");
-    _protectedIps.insert("192.168.11.255");
-    _protectedIps.insert("192.168.8.255");
 }
 
 bool SecurityCheckpoint::isIpProtected(const std::string &ip) const {
-    return _protectedIps.find(ip) != _protectedIps.end();
+    if (_protectedIps.find(ip) != _protectedIps.end()) {
+        return true;
+    }
+    if (!Config::getInstance().getGatewayHost().empty() &&
+        ip == Config::getInstance().getGatewayHost()) {
+        return true;
+    }
+    for (const auto &target : Config::getInstance().getSnmpTargets()) {
+        if (!target.ip.empty() && ip == target.ip) {
+            return true;
+        }
+    }
+    return false;
 }
+
+
+
 
 bool SecurityCheckpoint::validateBlockRequest(const std::string &ip, std::string &outReason) {
     if (ip.empty()) {

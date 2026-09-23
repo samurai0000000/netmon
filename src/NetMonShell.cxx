@@ -99,7 +99,7 @@ void NetMonShell::cmdStatus() {
             std::cout << "Remediation:      " << remed << std::endl;
         }
     }
-    std::cout << "Gateway Client:   " << (connected ? "CONNECTED (builder:3885)" : "DISCONNECTED (reconnecting...)") << std::endl;
+    std::cout << "Gateway Client:   " << (connected ? ("CONNECTED (" + Config::getInstance().getGatewayHost() + ":" + std::to_string(Config::getInstance().getGatewayPort()) + ")") : "DISCONNECTED (reconnecting...)") << std::endl;
     std::cout << "Registered Devs:  " << DeviceRegistry::getInstance().getDeviceCount() << std::endl;
     std::cout << "Uptime:           " << summary.value("uptime_seconds", 0) << " seconds" << std::endl;
     std::cout << "Devices Config:   " << DeviceRegistry::getInstance().getFilePath() << std::endl;

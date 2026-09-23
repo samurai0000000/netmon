@@ -19,7 +19,7 @@ Config &Config::getInstance() {
 Config::Config()
     : _configPath("")
     , _interface("br0")
-    , _gatewayHost("192.168.8.39")
+    , _gatewayHost("127.0.0.1")
     , _gatewayPort(3885)
     , _reconnectIntervalSec(5)
     , _devicesFile("~/.config/netmon/devices.cfg")
