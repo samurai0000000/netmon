@@ -1,5 +1,5 @@
 /*
- * app.js — netmon Real-Time Client & Canvas Bandwidth Grapher
+ * app.js — netmon Real-Time Client & High-DPI Canvas Bandwidth Grapher
  * Copyright (C) 2026, Charles Chiou
  */
 
@@ -8,7 +8,12 @@
     let allDevices = [];
     let sortColumn = 'ip';
     let sortDirection = 'asc';
-    const canvasCharts = {}; // Map ifName -> chart context, points, and layout cache
+    let currentDevicePage = 1;
+    let devicePageSize = 25;
+    let activeWanData = null;
+
+    // Cache of chart metadata and offscreen rendering buffers
+    const chartState = {};
 
     // Format helpers
     function formatBytes(bytes) {
@@ -64,7 +69,15 @@
             timeButtons.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             currentWindowHours = parseInt(btn.getAttribute('data-hours'), 10) || 24;
-            fetchAll();
+            
+            // Immediately redraw and fetch history for active interfaces
+            if (activeWanData && activeWanData.wan_interfaces) {
+                activeWanData.wan_interfaces.forEach(wan => {
+                    fetchAndDrawChart(activeWanData.target_ip || '192.168.8.1', wan.interface);
+                });
+            } else {
+                fetchAll();
+            }
         });
     });
 
@@ -72,6 +85,7 @@
     const searchInput = document.getElementById('device-search');
     if (searchInput) {
         searchInput.addEventListener('input', (e) => {
+            currentDevicePage = 1;
             renderDevices(e.target.value.toLowerCase().trim());
         });
     }
@@ -105,6 +119,34 @@
                 th.classList.remove('active-sort', 'asc', 'desc');
                 if (icon) icon.textContent = '';
             }
+        });
+    }
+
+    // Device Pagination Controls
+    const pageSizeSelect = document.getElementById('page-size-select');
+    if (pageSizeSelect) {
+        pageSizeSelect.addEventListener('change', (e) => {
+            devicePageSize = parseInt(e.target.value, 10) || 0;
+            currentDevicePage = 1;
+            renderDevices(searchInput ? searchInput.value.toLowerCase().trim() : '');
+        });
+    }
+
+    const btnPrev = document.getElementById('btn-page-prev');
+    if (btnPrev) {
+        btnPrev.addEventListener('click', () => {
+            if (currentDevicePage > 1) {
+                currentDevicePage--;
+                renderDevices(searchInput ? searchInput.value.toLowerCase().trim() : '');
+            }
+        });
+    }
+
+    const btnNext = document.getElementById('btn-page-next');
+    if (btnNext) {
+        btnNext.addEventListener('click', () => {
+            currentDevicePage++;
+            renderDevices(searchInput ? searchInput.value.toLowerCase().trim() : '');
         });
     }
 
@@ -151,6 +193,7 @@
             const res = await fetch('/api/snmp/wan');
             if (!res.ok) return;
             const data = await res.json();
+            activeWanData = data;
 
             const container = document.getElementById('wan-container');
             if (!container) return;
@@ -161,7 +204,7 @@
             }
 
             // Render WAN cards if structure changed
-            data.wan_interfaces.forEach((wan, idx) => {
+            data.wan_interfaces.forEach((wan) => {
                 let card = document.getElementById(`wan-card-${wan.interface}`);
                 if (!card) {
                     card = document.createElement('div');
@@ -231,11 +274,13 @@
                             </div>
                         </div>
                     `;
-                    // Remove initial placeholder if first card
                     if (container.querySelector('.loading-placeholder')) {
                         container.innerHTML = '';
                     }
                     container.appendChild(card);
+
+                    // Setup ResizeObserver for dynamic DPI redraw
+                    setupChartResizeObserver(wan.interface);
                 }
 
                 // Update text values
@@ -273,6 +318,25 @@
         }
     }
 
+    function setupChartResizeObserver(ifName) {
+        const wrap = document.getElementById(`chart-wrap-${ifName}`);
+        if (!wrap || wrap._hasObserver) return;
+        wrap._hasObserver = true;
+
+        if (window.ResizeObserver) {
+            const ro = new ResizeObserver(() => {
+                const state = chartState[ifName];
+                if (state && state.points) {
+                    const canvas = document.getElementById(`canvas-${ifName}`);
+                    if (canvas) {
+                        drawSmoothAreaChart(canvas, state.points, state.startTs, state.endTs, ifName);
+                    }
+                }
+            });
+            ro.observe(wrap);
+        }
+    }
+
     // 3. Historical Chart Drawing
     async function fetchAndDrawChart(targetIp, ifName) {
         try {
@@ -293,14 +357,21 @@
         }
     }
 
-    function drawSmoothAreaChart(canvas, points, startTs, endTs, ifName) {
+    function drawSmoothAreaChart(canvas, points, startTs, endTs, ifName, activeCrosshairPoint = null) {
         const dpr = window.devicePixelRatio || 1;
         const rect = canvas.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) return;
 
-        canvas.width = rect.width * dpr;
-        canvas.height = rect.height * dpr;
+        // Set high-DPI canvas dimensions
+        const pixelW = Math.round(rect.width * dpr);
+        const pixelH = Math.round(rect.height * dpr);
+        if (canvas.width !== pixelW || canvas.height !== pixelH) {
+            canvas.width = pixelW;
+            canvas.height = pixelH;
+        }
+
         const ctx = canvas.getContext('2d');
+        ctx.save();
         ctx.scale(dpr, dpr);
 
         const w = rect.width;
@@ -309,16 +380,17 @@
         const padBottom = 22;
         const padLeft = 42;
         const padRight = 14;
-        const plotW = w - padLeft - padRight;
-        const plotH = h - padTop - padBottom;
+        const plotW = Math.max(10, w - padLeft - padRight);
+        const plotH = Math.max(10, h - padTop - padBottom);
 
         ctx.clearRect(0, 0, w, h);
 
         if (!points || points.length === 0) {
             ctx.fillStyle = '#64748b';
-            ctx.font = '12px Inter';
+            ctx.font = '12px Inter, sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('Accumulating telemetry samples...', w / 2, h / 2);
+            ctx.restore();
             return;
         }
 
@@ -328,13 +400,13 @@
             if (p.in_mbps > maxRate) maxRate = p.in_mbps;
             if (p.out_mbps > maxRate) maxRate = p.out_mbps;
         });
-        maxRate *= 1.15; // 15% head room
+        maxRate *= 1.15; // 15% headroom
 
         // Draw gridlines
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
         ctx.lineWidth = 1;
         ctx.fillStyle = '#64748b';
-        ctx.font = '10px JetBrains Mono';
+        ctx.font = '10px "JetBrains Mono", monospace';
         ctx.textAlign = 'right';
 
         for (let i = 0; i <= 3; i++) {
@@ -347,10 +419,10 @@
             ctx.fillText(yVal.toFixed(1) + 'M', padLeft - 6, yPos + 3);
         }
 
-        // Time axis: 5 ticks anchored to [startTs, endTs] (Right edge = "Now")
+        // Time axis: 5 ticks anchored to [startTs, endTs]
         const timeRange = (endTs - startTs) || 1;
         ctx.fillStyle = '#64748b';
-        ctx.font = '10px JetBrains Mono';
+        ctx.font = '10px "JetBrains Mono", monospace';
 
         for (let i = 0; i <= 4; i++) {
             const frac = i / 4.0;
@@ -372,10 +444,10 @@
         }
 
         function getX(ts) {
-            return padLeft + ((ts - startTs) / timeRange) * plotW;
+            return padLeft + Math.min(1, Math.max(0, (ts - startTs) / timeRange)) * plotW;
         }
         function getY(val) {
-            return padTop + plotH - (val / maxRate) * plotH;
+            return padTop + plotH - Math.min(1, Math.max(0, val / maxRate)) * plotH;
         }
 
         const firstPtX = getX(points[0].timestamp);
@@ -429,8 +501,46 @@
         ctx.lineWidth = 1.8;
         ctx.stroke();
 
-        // Cache chart metadata for hover crosshair & tooltip
-        canvasCharts[ifName] = {
+        // Draw active crosshair if hover/touch is active
+        if (activeCrosshairPoint) {
+            const cx = getX(activeCrosshairPoint.timestamp);
+            const cyIn = getY(activeCrosshairPoint.in_mbps);
+            const cyOut = getY(activeCrosshairPoint.out_mbps);
+
+            // Vertical guideline
+            ctx.save();
+            ctx.beginPath();
+            ctx.setLineDash([3, 3]);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+            ctx.lineWidth = 1;
+            ctx.moveTo(cx, padTop);
+            ctx.lineTo(cx, padTop + plotH);
+            ctx.stroke();
+
+            // Highlight dots
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.arc(cx, cyIn, 4.5, 0, 2 * Math.PI);
+            ctx.fillStyle = '#00f2fe';
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(cx, cyOut, 4.5, 0, 2 * Math.PI);
+            ctx.fillStyle = '#8b5cf6';
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        ctx.restore();
+
+        // Cache chart metadata for interaction
+        chartState[ifName] = {
             points,
             startTs,
             endTs,
@@ -457,17 +567,18 @@
 
         const tooltip = document.getElementById(`tooltip-${ifName}`);
 
-        canvas.addEventListener('mousemove', (e) => {
-            const meta = canvasCharts[ifName];
+        function handlePointerMove(clientX, clientY) {
+            const meta = chartState[ifName];
             if (!meta || !meta.points || meta.points.length === 0) return;
 
             const rect = canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
+            const mouseX = clientX - rect.left;
+            const mouseY = clientY - rect.top;
 
             if (mouseX < meta.padLeft || mouseX > meta.w - meta.padRight ||
                 mouseY < meta.padTop || mouseY > meta.padTop + meta.plotH) {
                 if (tooltip) tooltip.style.display = 'none';
+                drawSmoothAreaChart(canvas, meta.points, meta.startTs, meta.endTs, ifName, null);
                 return;
             }
 
@@ -485,45 +596,14 @@
 
             if (!closest) return;
 
-            // Redraw chart with crosshair
-            const ctx = canvas.getContext('2d');
-            drawSmoothAreaChart(canvas, meta.points, meta.startTs, meta.endTs, ifName);
+            // Redraw with crosshair overlay
+            drawSmoothAreaChart(canvas, meta.points, meta.startTs, meta.endTs, ifName, closest);
 
-            const cx = meta.getX(closest.timestamp);
-            const cyIn = meta.getY(closest.in_mbps);
-            const cyOut = meta.getY(closest.out_mbps);
-
-            // Draw vertical dashed line
-            ctx.save();
-            ctx.beginPath();
-            ctx.setLineDash([3, 3]);
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-            ctx.lineWidth = 1;
-            ctx.moveTo(cx, meta.padTop);
-            ctx.lineTo(cx, meta.padTop + meta.plotH);
-            ctx.stroke();
-
-            // Highlight dots
-            ctx.setLineDash([]);
-            ctx.beginPath();
-            ctx.arc(cx, cyIn, 4, 0, 2 * Math.PI);
-            ctx.fillStyle = '#00f2fe';
-            ctx.fill();
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-
-            ctx.beginPath();
-            ctx.arc(cx, cyOut, 4, 0, 2 * Math.PI);
-            ctx.fillStyle = '#8b5cf6';
-            ctx.fill();
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-            ctx.restore();
-
-            // Show tooltip
+            // Show floating tooltip
             if (tooltip) {
+                const cx = meta.getX(closest.timestamp);
+                const cyIn = meta.getY(closest.in_mbps);
+                const cyOut = meta.getY(closest.out_mbps);
                 const d = new Date(closest.timestamp * 1000);
                 const timeStr = d.toLocaleString([], {
                     month: 'short',
@@ -542,15 +622,25 @@
                 tooltip.style.left = `${Math.min(Math.max(cx, 80), meta.w - 80)}px`;
                 tooltip.style.top = `${Math.max(Math.min(cyIn, cyOut) - 10, 45)}px`;
             }
-        });
+        }
 
-        canvas.addEventListener('mouseleave', () => {
-            const meta = canvasCharts[ifName];
+        function handlePointerLeave() {
+            const meta = chartState[ifName];
             if (meta && meta.points) {
-                drawSmoothAreaChart(canvas, meta.points, meta.startTs, meta.endTs, ifName);
+                drawSmoothAreaChart(canvas, meta.points, meta.startTs, meta.endTs, ifName, null);
             }
             if (tooltip) tooltip.style.display = 'none';
-        });
+        }
+
+        canvas.addEventListener('mousemove', (e) => handlePointerMove(e.clientX, e.clientY));
+        canvas.addEventListener('mouseleave', handlePointerLeave);
+
+        canvas.addEventListener('touchmove', (e) => {
+            if (e.touches && e.touches[0]) {
+                handlePointerMove(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: true });
+        canvas.addEventListener('touchend', handlePointerLeave);
     }
 
     // 4. LAN Traffic
@@ -568,39 +658,53 @@
             }
 
             const totalPacketsEl = document.getElementById('lan-total-packets');
-            if (totalPacketsEl && data.total_packets) {
+            if (totalPacketsEl && data.total_packets !== undefined) {
                 totalPacketsEl.textContent = data.total_packets.toLocaleString();
             }
 
             // Protocol breakdown
             const protoBar = document.getElementById('protocol-bar');
-            if (protoBar && data.protocols) {
-                const p = data.protocols;
-                const total = (p.https || 0) + (p.ssh || 0) + (p.dns || 0) + (p.arp || 0) + (p.other || 0) + (p.http || 0) || 1;
-                const httpsPct = (((p.https || 0) / total) * 100).toFixed(1);
-                const sshPct = (((p.ssh || 0) / total) * 100).toFixed(1);
-                const dnsPct = (((p.dns || 0) / total) * 100).toFixed(1);
-                const otherPct = Math.max(0, (100 - parseFloat(httpsPct) - parseFloat(sshPct) - parseFloat(dnsPct))).toFixed(1);
+            if (protoBar) {
+                const p = data.protocols || {};
+                const httpsCount = p.https || 0;
+                const dnsCount = p.dns || 0;
+                const sshCount = p.ssh || 0;
+                const arpCount = p.arp || 0;
+                const httpCount = p.http || 0;
+                const otherCount = p.other || 0;
+                const total = httpsCount + dnsCount + sshCount + arpCount + httpCount + otherCount;
 
-                protoBar.innerHTML = `
-                    <div class="proto-segment proto-https" style="width: ${httpsPct}%" title="HTTPS: ${httpsPct}%"></div>
-                    <div class="proto-segment proto-ssh" style="width: ${sshPct}%" title="SSH: ${sshPct}%"></div>
-                    <div class="proto-segment proto-dns" style="width: ${dnsPct}%" title="DNS: ${dnsPct}%"></div>
-                    <div class="proto-segment proto-other" style="width: ${otherPct}%" title="Other: ${otherPct}%"></div>
-                `;
+                if (total === 0) {
+                    protoBar.innerHTML = `<div class="proto-segment proto-segment-idle" title="Monitoring LAN traffic..."></div>`;
+                } else {
+                    const httpsPct = ((httpsCount / total) * 100).toFixed(1);
+                    const dnsPct = ((dnsCount / total) * 100).toFixed(1);
+                    const sshPct = ((sshCount / total) * 100).toFixed(1);
+                    const arpPct = ((arpCount / total) * 100).toFixed(1);
+                    const otherPct = Math.max(0, (100 - parseFloat(httpsPct) - parseFloat(dnsPct) - parseFloat(sshPct) - parseFloat(arpPct))).toFixed(1);
+
+                    protoBar.innerHTML = `
+                        <div class="proto-segment proto-https" style="width: ${httpsPct}%" title="HTTPS: ${httpsPct}% (${httpsCount} pkts)"></div>
+                        <div class="proto-segment proto-dns" style="width: ${dnsPct}%" title="DNS: ${dnsPct}% (${dnsCount} pkts)"></div>
+                        <div class="proto-segment proto-ssh" style="width: ${sshPct}%" title="SSH: ${sshPct}% (${sshCount} pkts)"></div>
+                        <div class="proto-segment proto-arp" style="width: ${arpPct}%" title="ARP: ${arpPct}% (${arpCount} pkts)"></div>
+                        <div class="proto-segment proto-other" style="width: ${otherPct}%" title="Other: ${otherPct}% (${otherCount} pkts)"></div>
+                    `;
+                }
             }
 
             // Top talkers list
             const talkersList = document.getElementById('top-talkers-list');
-            if (talkersList && data.top_talkers) {
+            if (talkersList) {
                 talkersList.innerHTML = '';
-                if (data.top_talkers.length === 0) {
-                    talkersList.innerHTML = '<li><span>No active flows in window</span></li>';
+                const talkers = data.top_talkers || [];
+                if (talkers.length === 0) {
+                    talkersList.innerHTML = '<li><span class="talker-empty-hint">No active high-bandwidth flows in last 15m</span></li>';
                 } else {
-                    data.top_talkers.slice(0, 5).forEach(t => {
+                    talkers.slice(0, 5).forEach((t, idx) => {
                         const li = document.createElement('li');
                         li.innerHTML = `
-                            <span>${t.name || t.ip}</span>
+                            <span><span class="talker-rank">#${idx + 1}</span>${t.name || t.ip}</span>
                             <strong>${formatBytes(t.bytes_total)} (${formatMbps(t.rate_mbps)}M)</strong>
                         `;
                         talkersList.appendChild(li);
@@ -644,8 +748,15 @@
             });
         }
 
+        const pageInfoEl = document.getElementById('devices-page-info');
+        const prevBtn = document.getElementById('btn-page-prev');
+        const nextBtn = document.getElementById('btn-page-next');
+
         if (filtered.length === 0) {
             tbody.innerHTML = '<tr><td colspan="6" class="text-center">No matching devices found</td></tr>';
+            if (pageInfoEl) pageInfoEl.textContent = '0 devices';
+            if (prevBtn) prevBtn.disabled = true;
+            if (nextBtn) nextBtn.disabled = true;
             return;
         }
 
@@ -664,14 +775,37 @@
             return sortDirection === 'asc' ? cmp : -cmp;
         });
 
-        tbody.innerHTML = filtered.map(d => {
+        // Pagination slicing
+        const totalItems = filtered.length;
+        let displayList = filtered;
+
+        if (devicePageSize > 0) {
+            const totalPages = Math.ceil(totalItems / devicePageSize) || 1;
+            if (currentDevicePage > totalPages) currentDevicePage = totalPages;
+            if (currentDevicePage < 1) currentDevicePage = 1;
+
+            const startIdx = (currentDevicePage - 1) * devicePageSize;
+            displayList = filtered.slice(startIdx, startIdx + devicePageSize);
+
+            if (pageInfoEl) {
+                pageInfoEl.textContent = `Page ${currentDevicePage} of ${totalPages} (${totalItems} devices)`;
+            }
+            if (prevBtn) prevBtn.disabled = (currentDevicePage <= 1);
+            if (nextBtn) nextBtn.disabled = (currentDevicePage >= totalPages);
+        } else {
+            if (pageInfoEl) pageInfoEl.textContent = `All ${totalItems} devices`;
+            if (prevBtn) prevBtn.disabled = true;
+            if (nextBtn) nextBtn.disabled = true;
+        }
+
+        tbody.innerHTML = displayList.map(d => {
             const catClass = `cat-${d.category || 'unregistered'}`;
             return `
                 <tr>
-                    <td class="device-name-cell">${d.name || '<span class="text-muted">Unnamed</span>'}</td>
+                    <td class="device-name-cell" title="${d.name || ''}">${d.name || '<span class="text-muted">Unnamed</span>'}</td>
                     <td class="mono-cell">${d.ip || '-'}</td>
                     <td class="mono-cell">${d.mac || '-'}</td>
-                    <td>${d.vendor || '<span class="text-muted">Unknown</span>'}</td>
+                    <td title="${d.vendor || ''}">${d.vendor || '<span class="text-muted">Unknown</span>'}</td>
                     <td><span class="cat-badge ${catClass}">${d.category || 'unregistered'}</span></td>
                     <td class="mono-cell">${formatTime(d.last_seen)}</td>
                 </tr>
@@ -679,7 +813,20 @@
         }).join('');
     }
 
-    // Initial load and periodic interval
+    // Global window resize listener to redraw canvas charts
+    window.addEventListener('resize', () => {
+        Object.keys(chartState).forEach(ifName => {
+            const state = chartState[ifName];
+            if (state && state.points) {
+                const canvas = document.getElementById(`canvas-${ifName}`);
+                if (canvas) {
+                    drawSmoothAreaChart(canvas, state.points, state.startTs, state.endTs, ifName);
+                }
+            }
+        });
+    });
+
+    // Initial load and periodic polling interval
     fetchAll();
     setInterval(fetchAll, 3000);
 })();
