@@ -6,4 +6,5 @@ build/
 *.tmp
 .cursor
 .agents
-plan/
+plan/*
+!plan/done/
