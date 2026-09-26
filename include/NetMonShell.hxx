@@ -19,6 +19,7 @@ public:
     void stop();
 
     int executeCommand(const std::string &cmdLine);
+    void resetForTesting();
 
 private:
     NetMonShell();
@@ -36,8 +37,19 @@ private:
     void cmdNameDevice(const std::string &mac, const std::string &name,
                        const std::string &category = "");
     void cmdReload();
+    void cmdPolicy(const std::string &mode = "");
+    void cmdPending();
+    void cmdApprove(int64_t id);
+    void cmdDeny(int64_t id, const std::string &reason = "");
+    void cmdReconcile(int64_t id, const std::string &action);
+    void cmdAudit(size_t limit = 50);
+    void cmdSyslog(size_t limit = 50);
+    void cmdAuthLogin(const std::string &password);
+    void cmdAuthSetPassword(const std::string &currentPass, const std::string &newPass);
+    bool isAuthenticated() const;
 
     std::atomic<bool> _running;
+    std::string       _sessionToken;
 };
 
 #endif /* NETMON_NETMONSHELL_HXX */

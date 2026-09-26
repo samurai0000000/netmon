@@ -21,6 +21,8 @@
 #include "MacVendorResolver.hxx"
 #include "DnsResolver.hxx"
 #include "NetMonShell.hxx"
+#include "AuthManager.hxx"
+#include "SyslogServer.hxx"
 
 static volatile sig_atomic_t g_shutdownRequested = 0;
 
@@ -47,6 +49,7 @@ static void printUsage(const char *progName) {
               << "  daemon         Start NetMon daemon with interactive screen CLI shell (default)\n"
               << "  run            Start NetMon daemon in non-interactive background mode\n"
               << "  status         Print current device registry and interface status\n"
+              << "  set-password   Set or replace admin password (requires controlling terminal)\n"
               << "  version        Show NetMon version and build metadata\n"
               << "  help           Show this help message\n\n"
               << "Options:\n"
@@ -86,6 +89,8 @@ int main(int argc, char **argv) {
             return 0;
         } else if (arg == "status") {
             mode = "status";
+        } else if (arg == "set-password") {
+            mode = "set-password";
         } else if (arg == "run") {
             mode = "run";
         } else if (arg == "daemon") {
@@ -124,6 +129,34 @@ int main(int argc, char **argv) {
     }
     if (!overrideDb.empty()) {
         Config::getInstance().setDatabaseFile(overrideDb);
+    }
+
+    if (mode == "set-password") {
+        if (!isatty(STDIN_FILENO)) {
+            std::cerr << "Error: set-password requires a controlling terminal" << std::endl;
+            return 1;
+        }
+
+        char *p1 = getpass("Enter new admin password: ");
+        if (!p1 || std::strlen(p1) == 0) {
+            std::cerr << "Error: Password cannot be empty" << std::endl;
+            return 1;
+        }
+        std::string pass1 = p1;
+
+        char *p2 = getpass("Confirm new admin password: ");
+        if (!p2 || pass1 != p2) {
+            std::cerr << "Error: Passwords do not match" << std::endl;
+            return 1;
+        }
+
+        if (!AuthManager::getInstance().setPassword(pass1, "", false)) {
+            std::cerr << "Error: Failed to set admin password" << std::endl;
+            return 1;
+        }
+
+        std::cout << "Admin password successfully updated." << std::endl;
+        return 0;
     }
 
     // Load persistent devices registry
@@ -171,6 +204,9 @@ int main(int argc, char **argv) {
     // Start embedded Web Server and live dashboard
     WebServer::getInstance().start();
 
+    // Start UDP syslog receiver for router logs
+    SyslogServer::getInstance().start();
+
     // Initialize router driver (stubs until hardware credentials configured)
     auto zyxel = std::make_shared<ZyxelDriver>();
     AimonGatewayClient::getInstance().setRouterDriver(zyxel);
@@ -191,6 +227,7 @@ int main(int argc, char **argv) {
     }
 
     std::cout << "\nShutting down NetMon subsystems..." << std::endl;
+    SyslogServer::getInstance().stop();
     WebServer::getInstance().stop();
     SnmpAggregator::getInstance().stop();
     LanSniffer::getInstance().stop();
@@ -198,6 +235,7 @@ int main(int argc, char **argv) {
     DnsResolver::getInstance().stop();
     MacVendorResolver::getInstance().stop();
 
+    SyslogServer::getInstance().join();
     WebServer::getInstance().join();
     SnmpAggregator::getInstance().join();
     AimonGatewayClient::getInstance().join();

@@ -28,6 +28,9 @@ public:
     void setWebPort(uint16_t port) { _webPort = port; }
     uint16_t getWebPort() const { return _webPort; }
 
+    static nlohmann::json getRegistrationJson(uint16_t webPort = 3884);
+    std::string dispatchRequest(const std::string &line);
+
 private:
     AimonGatewayClient();
     ~AimonGatewayClient();

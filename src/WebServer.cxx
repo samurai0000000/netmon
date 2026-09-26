@@ -7,11 +7,13 @@
 #include "WebServer.hxx"
 #include "WebAssets.hxx"
 #include "Config.hxx"
+#include "AuthManager.hxx"
 #include "SnmpAggregator.hxx"
 #include "SnmpDatabase.hxx"
 #include "LanSniffer.hxx"
 #include "DeviceRegistry.hxx"
 #include "AimonGatewayClient.hxx"
+#include "SecurityCheckpoint.hxx"
 #include "Version.hxx"
 
 #include <iostream>
@@ -41,14 +43,21 @@ WebServer &WebServer::getInstance() {
 WebServer::WebServer()
     : _bindAddress("0.0.0.0")
     , _port(3884)
+    , _adminBindAddress("127.0.0.1")
+    , _adminPort(3886)
     , _endpointsEnabled(false)
     , _running(false)
-    , _server(std::make_unique<httplib::Server>()) {
+    , _server(std::make_unique<httplib::Server>())
+    , _adminServer(std::make_unique<httplib::Server>()) {
 }
 
 WebServer::~WebServer() {
     stop();
     join();
+}
+
+bool WebServer::isReservedAdminPort(int port) {
+    return (port == 3883 || port == 3884 || port == 3885 || port == 16880);
 }
 
 std::string WebServer::createUiSession() {
@@ -120,6 +129,32 @@ bool WebServer::isValidUiSession(const httplib::Request &req) const {
     return false;
 }
 
+bool WebServer::isValidAdminSession(const httplib::Request &req, std::string &outToken) const {
+    outToken.clear();
+    if (req.has_header("Authorization")) {
+        std::string auth = req.get_header_value("Authorization");
+        if (auth.rfind("Bearer ", 0) == 0) {
+            outToken = auth.substr(7);
+        }
+    } else if (req.has_header("X-Admin-Token")) {
+        outToken = req.get_header_value("X-Admin-Token");
+    } else if (req.has_header("Cookie")) {
+        std::string cookie = req.get_header_value("Cookie");
+        size_t pos = cookie.find("netmon_admin_session=");
+        if (pos != std::string::npos) {
+            size_t start = pos + 21;
+            size_t end = cookie.find(';', start);
+            outToken = (end == std::string::npos) ? cookie.substr(start) : cookie.substr(start, end - start);
+        }
+    }
+
+    if (outToken.empty()) {
+        return false;
+    }
+
+    return AuthManager::getInstance().validateSession(outToken);
+}
+
 std::string WebServer::getMcpHintForPath(const std::string &path, const std::string &body) {
     (void)body;
     if (path == "/api/status") {
@@ -161,10 +196,11 @@ std::string WebServer::getMcpHintForPath(const std::string &path, const std::str
     return "Use official MCP tools ('snmp_*', 'lan_*', 'firewall_*'). Direct REST API access is disabled.";
 }
 
-bool WebServer::start(const std::string &bindAddress, int port) {
+bool WebServer::start(const std::string &bindAddress, int port, int adminPort) {
     if (_running.load()) {
         return false;
     }
+    join();
 
     if (!bindAddress.empty()) {
         _bindAddress = bindAddress;
@@ -178,6 +214,18 @@ bool WebServer::start(const std::string &bindAddress, int port) {
         _port = Config::getInstance().getWebConfig().port;
     }
 
+    if (adminPort > 0) {
+        _adminPort = adminPort;
+    } else {
+        _adminPort = Config::getInstance().getAdminPort();
+    }
+
+    if (isReservedAdminPort(_adminPort) || _adminPort == _port) {
+        std::cerr << "WebServer: Error: Admin port " << _adminPort
+                  << " is reserved or conflicts with dashboard port " << _port << std::endl;
+        return false;
+    }
+
     _endpointsEnabled = Config::getInstance().getWebConfig().endpointsEnabled;
 
     if (!Config::getInstance().getWebConfig().enabled) {
@@ -185,18 +233,31 @@ bool WebServer::start(const std::string &bindAddress, int port) {
         return false;
     }
 
-    setupRoutes();
+    _server = std::make_unique<httplib::Server>();
+    _adminServer = std::make_unique<httplib::Server>();
+
+    setupDashboardRoutes();
+    setupAdminRoutes();
+
     _running.store(true);
-    _thread = std::thread(&WebServer::run, this);
+    _thread = std::thread(&WebServer::runDashboard, this);
+    _adminThread = std::thread(&WebServer::runAdmin, this);
+
     std::cout << "WebServer: Dashboard available at http://" << _bindAddress << ":" << _port << std::endl;
+    std::cout << "WebServer: Loopback admin available at http://" << _adminBindAddress << ":" << _adminPort << std::endl;
     return true;
 }
 
 void WebServer::stop() {
-    if (!_running.load()) return;
+    if (!_running.load()) {
+        return;
+    }
     _running.store(false);
     if (_server) {
         _server->stop();
+    }
+    if (_adminServer) {
+        _adminServer->stop();
     }
 }
 
@@ -204,6 +265,13 @@ void WebServer::join() {
     if (_thread.joinable()) {
         _thread.join();
     }
+    if (_adminThread.joinable()) {
+        _adminThread.join();
+    }
+    _server.reset();
+    _adminServer.reset();
+    std::lock_guard<std::mutex> lock(_sessionMutex);
+    std::map<std::string, time_t>().swap(_uiSessions);
 }
 
 bool WebServer::isRunning() const {
@@ -214,14 +282,319 @@ int WebServer::getPort() const {
     return _port;
 }
 
-void WebServer::run() {
+int WebServer::getAdminPort() const {
+    return _adminPort;
+}
+
+void WebServer::runDashboard() {
     _server->set_read_timeout(1, 0);
     _server->set_write_timeout(5, 0);
     _server->listen(_bindAddress.c_str(), _port);
-    _running.store(false);
 }
 
-void WebServer::setupRoutes() {
+void WebServer::runAdmin() {
+    _adminServer->set_read_timeout(1, 0);
+    _adminServer->set_write_timeout(5, 0);
+    _adminServer->listen(_adminBindAddress.c_str(), _adminPort);
+}
+
+void WebServer::setupAdminRoutes() {
+    _adminServer->Post("/api/auth/login", [this](const httplib::Request &req, httplib::Response &res) {
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res.status = 400;
+            res.set_content(json{{"error", "Invalid JSON body"}}.dump(), "application/json");
+            return;
+        }
+
+        std::string password = body.value("password", "");
+        std::string token = AuthManager::getInstance().login(password);
+        if (token.empty()) {
+            res.status = 401;
+            res.set_content(json{{"status", "unauthorized"}, {"error", "Invalid password"}}.dump(), "application/json");
+            return;
+        }
+
+        res.status = 200;
+        res.set_header("Set-Cookie", "netmon_admin_session=" + token + "; Path=/; HttpOnly; SameSite=Strict");
+        res.set_content(json{{"status", "ok"}, {"token", token}}.dump(), "application/json");
+    });
+
+    _adminServer->Post("/api/auth/logout", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+        AuthManager::getInstance().logout(token);
+        res.status = 200;
+        res.set_content(json{{"status", "ok"}}.dump(), "application/json");
+    });
+
+    _adminServer->Get("/api/admin/status", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+        json j = {
+            {"status", "ok"},
+            {"subsystem", "netmon_admin"},
+            {"admin_port", _adminPort}
+        };
+        res.set_content(j.dump(), "application/json");
+    });
+
+    _adminServer->Get("/api/admin/pending", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+        std::string filter = req.has_param("status") ? req.get_param_value("status") : "pending";
+        auto tickets = SecurityCheckpoint::getInstance().getPendingTickets(filter);
+        json arr = json::array();
+        for (const auto &t : tickets) {
+            arr.push_back({
+                {"id", t.id},
+                {"created_at", t.createdAt},
+                {"expires_at", t.expiresAt},
+                {"requester", t.requester},
+                {"tool", t.tool},
+                {"payload", t.payload},
+                {"status", t.status}
+            });
+        }
+        res.status = 200;
+        res.set_content(json{{"status", "ok"}, {"pending", arr}}.dump(), "application/json");
+    });
+
+    _adminServer->Post("/api/admin/approve", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res.status = 400;
+            res.set_content(json{{"error", "Invalid JSON"}}.dump(), "application/json");
+            return;
+        }
+        int64_t id = body.value("ticket_id", 0);
+        if (id <= 0 && body.contains("id")) {
+            id = body.value("id", 0);
+        }
+        std::string outErr;
+        if (SecurityCheckpoint::getInstance().approve(id, outErr)) {
+            res.status = 200;
+            res.set_content(json{{"status", "ok"}}.dump(), "application/json");
+        } else {
+            res.status = 400;
+            res.set_content(json{{"status", "error"}, {"error", outErr}}.dump(), "application/json");
+        }
+    });
+
+    _adminServer->Post("/api/admin/deny", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res.status = 400;
+            res.set_content(json{{"error", "Invalid JSON"}}.dump(), "application/json");
+            return;
+        }
+        int64_t id = body.value("ticket_id", 0);
+        if (id <= 0 && body.contains("id")) {
+            id = body.value("id", 0);
+        }
+        std::string reason = body.value("reason", "Operator denied");
+        if (SecurityCheckpoint::getInstance().deny(id, reason)) {
+            res.status = 200;
+            res.set_content(json{{"status", "ok"}}.dump(), "application/json");
+        } else {
+            res.status = 400;
+            res.set_content(json{{"status", "error"}, {"error", "Failed to deny ticket"}}.dump(), "application/json");
+        }
+    });
+
+    _adminServer->Post("/api/admin/reconcile", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res.status = 400;
+            res.set_content(json{{"error", "Invalid JSON"}}.dump(), "application/json");
+            return;
+        }
+        int64_t id = body.value("ticket_id", 0);
+        if (id <= 0 && body.contains("id")) {
+            id = body.value("id", 0);
+        }
+        std::string action = body.value("action", "");
+        std::string outErr;
+        if (SecurityCheckpoint::getInstance().reconcile(id, action, outErr)) {
+            res.status = 200;
+            res.set_content(json{{"status", "ok"}}.dump(), "application/json");
+        } else {
+            res.status = 400;
+            res.set_content(json{{"status", "error"}, {"error", outErr}}.dump(), "application/json");
+        }
+    });
+
+    _adminServer->Get("/api/admin/policy", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+        std::string pol = SecurityCheckpoint::policyModeToString(SecurityCheckpoint::getInstance().getPolicyMode());
+        res.status = 200;
+        res.set_content(json{{"status", "ok"}, {"policy", pol}}.dump(), "application/json");
+    });
+
+    _adminServer->Post("/api/admin/policy", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res.status = 400;
+            res.set_content(json{{"error", "Invalid JSON"}}.dump(), "application/json");
+            return;
+        }
+        std::string pol = body.value("policy", "");
+        PolicyMode mode = SecurityCheckpoint::stringToPolicyMode(pol);
+        SecurityCheckpoint::getInstance().setPolicyMode(mode);
+        res.status = 200;
+        res.set_content(json{{"status", "ok"}, {"policy", SecurityCheckpoint::policyModeToString(mode)}}.dump(), "application/json");
+    });
+
+    _adminServer->Get("/api/admin/audit", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+        auto records = SnmpDatabase::getInstance().getAllAuditOutbox();
+        json arr = json::array();
+        for (const auto &r : records) {
+            arr.push_back({
+                {"sequence", r.sequence},
+                {"timestamp", r.timestamp},
+                {"prev_hash", r.prevHash},
+                {"record_hash", SecurityCheckpoint::computeRecordHash(r)},
+                {"action_id", r.actionId},
+                {"tool", r.tool},
+                {"requester", r.requester},
+                {"payload", r.payload},
+                {"decision", r.decision},
+                {"reason", r.reason},
+                {"exported", r.exported}
+            });
+        }
+        res.status = 200;
+        res.set_content(json{{"status", "ok"}, {"records", arr}}.dump(), "application/json");
+    });
+
+    _adminServer->Get("/api/admin/syslog", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+
+        size_t limit = 50;
+        if (req.has_param("limit")) {
+            try {
+                limit = std::stoul(req.get_param_value("limit"));
+            } catch (...) {
+                limit = 50;
+            }
+        }
+
+        auto events = SnmpDatabase::getInstance().getSyslogEvents(limit);
+        json arr = json::array();
+        for (const auto &ev : events) {
+            arr.push_back({
+                {"id", ev.id},
+                {"timestamp", ev.timestamp},
+                {"source_ip", ev.sourceIp},
+                {"facility", ev.facility},
+                {"severity", ev.severity},
+                {"tag", ev.tag},
+                {"message", ev.message},
+                {"time_adjacent", ev.timeAdjacent},
+                {"adjacent_audit_seq", ev.adjacentAuditSeq},
+                {"raw", ev.raw}
+            });
+        }
+
+        res.status = 200;
+        res.set_content(json{{"status", "ok"}, {"events", arr}}.dump(), "application/json");
+    });
+
+    _adminServer->Post("/api/auth/change-password", [this](const httplib::Request &req, httplib::Response &res) {
+        std::string token;
+        if (!isValidAdminSession(req, token)) {
+            res.status = 401;
+            res.set_content(json{{"error", "Unauthorized"}}.dump(), "application/json");
+            return;
+        }
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res.status = 400;
+            res.set_content(json{{"error", "Invalid JSON"}}.dump(), "application/json");
+            return;
+        }
+        std::string currentPass = body.value("current_password", "");
+        std::string newPass = body.value("new_password", "");
+        if (newPass.empty()) {
+            res.status = 400;
+            res.set_content(json{{"status", "error"}, {"error", "New password cannot be empty"}}.dump(), "application/json");
+            return;
+        }
+        if (!AuthManager::getInstance().setPassword(newPass, currentPass, true)) {
+            res.status = 400;
+            res.set_content(json{{"status", "error"}, {"error", "Failed to change password: invalid current password"}}.dump(), "application/json");
+            return;
+        }
+        res.status = 200;
+        res.set_content(json{{"status", "ok"}}.dump(), "application/json");
+    });
+}
+
+void WebServer::setupDashboardRoutes() {
     // Gate REST API endpoints if disabled by configuration, unless request is from an authenticated Web UI session
     if (!_endpointsEnabled) {
         _server->set_pre_routing_handler([this](const httplib::Request &req, httplib::Response &res) {

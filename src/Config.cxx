@@ -104,6 +104,7 @@ bool Config::load(const std::string &customPath) {
             webSetting.lookupValue("port", _webConfig.port);
             webSetting.lookupValue("bind_address", _webConfig.bindAddress);
             webSetting.lookupValue("endpoints_enabled", _webConfig.endpointsEnabled);
+            webSetting.lookupValue("admin_port", _webConfig.adminPort);
         } catch (const libconfig::SettingNotFoundException &) {
         }
     }
@@ -167,6 +168,8 @@ bool Config::load(const std::string &customPath) {
 
     const char *envWebPort = getenv("NETMON_WEB_PORT");
     if (envWebPort && *envWebPort) _webConfig.port = std::atoi(envWebPort);
+    const char *envAdminPort = getenv("NETMON_ADMIN_PORT");
+    if (envAdminPort && *envAdminPort) _webConfig.adminPort = std::atoi(envAdminPort);
     const char *envWebEnabled = getenv("NETMON_WEB_ENABLED");
     if (envWebEnabled && *envWebEnabled) {
         std::string s(envWebEnabled);
@@ -444,6 +447,14 @@ int Config::getWebPort() const {
 
 void Config::setWebPort(int port) {
     _webConfig.port = port;
+}
+
+int Config::getAdminPort() const {
+    return _webConfig.adminPort;
+}
+
+void Config::setAdminPort(int port) {
+    _webConfig.adminPort = port;
 }
 
 bool Config::isWebEnabled() const {

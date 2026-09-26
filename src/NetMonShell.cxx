@@ -9,6 +9,9 @@
 #include "LanSniffer.hxx"
 #include "DeviceRegistry.hxx"
 #include "AimonGatewayClient.hxx"
+#include "AuthManager.hxx"
+#include "SecurityCheckpoint.hxx"
+#include "SnmpDatabase.hxx"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -75,6 +78,15 @@ void NetMonShell::printHelp() const {
     std::cout << "  traffic                      Show LAN throughput and protocol breakdown" << std::endl;
     std::cout << "  name <mac> <name> [category] Assign friendly name and category to a device" << std::endl;
     std::cout << "  reload                       Reload configuration and devices registry" << std::endl;
+    std::cout << "  auth login <password>        Authenticate local operator session" << std::endl;
+    std::cout << "  auth set-password <old> <new>Change admin password (requires old password)" << std::endl;
+    std::cout << "  policy [mode]                View or update policy (disabled, dry_run, require_approval, live)" << std::endl;
+    std::cout << "  pending                      List actions awaiting operator approval" << std::endl;
+    std::cout << "  approve <id>                 Approve and execute a pending action" << std::endl;
+    std::cout << "  deny <id> [reason]           Deny a pending action" << std::endl;
+    std::cout << "  reconcile <id> <appl|retry>  Reconcile an interrupted action" << std::endl;
+    std::cout << "  audit [limit]                View recent audit outbox decisions" << std::endl;
+    std::cout << "  syslog [limit]               View recent router syslog events" << std::endl;
     std::cout << "  help                         Show this help message" << std::endl;
     std::cout << "  quit / exit                  Exit the shell" << std::endl;
 }
@@ -288,6 +300,59 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
         cmdNameDevice(mac, name, cat);
     } else if (cmd == "reload") {
         cmdReload();
+    } else if (cmd == "auth") {
+        std::string subCmd;
+        iss >> subCmd;
+        if (subCmd == "login") {
+            std::string pass;
+            iss >> pass;
+            cmdAuthLogin(pass);
+        } else if (subCmd == "set-password") {
+            std::string currPass, newPass;
+            iss >> currPass >> newPass;
+            if (newPass.empty() || !AuthManager::getInstance().setPassword(newPass, currPass, true)) {
+                std::cout << "Failed to change password. Current password incorrect or new password empty." << std::endl;
+                return 1;
+            }
+            std::cout << "Admin password changed successfully. Previous sessions revoked." << std::endl;
+            _sessionToken = AuthManager::getInstance().login(newPass);
+            return 0;
+        } else {
+            std::cout << "Usage: auth login <password> | auth set-password <current> <new>" << std::endl;
+        }
+    } else if (cmd == "policy") {
+        std::string mode;
+        iss >> mode;
+        cmdPolicy(mode);
+    } else if (cmd == "pending") {
+        cmdPending();
+    } else if (cmd == "approve") {
+        int64_t id = 0;
+        iss >> id;
+        cmdApprove(id);
+    } else if (cmd == "deny") {
+        int64_t id = 0;
+        std::string reason;
+        iss >> id;
+        std::getline(iss, reason);
+        size_t first = reason.find_first_not_of(" \t");
+        if (first != std::string::npos) {
+            reason = reason.substr(first);
+        }
+        cmdDeny(id, reason);
+    } else if (cmd == "reconcile") {
+        int64_t id = 0;
+        std::string action;
+        iss >> id >> action;
+        cmdReconcile(id, action);
+    } else if (cmd == "audit") {
+        size_t lim = 50;
+        iss >> lim;
+        cmdAudit(lim > 0 ? lim : 50);
+    } else if (cmd == "syslog") {
+        size_t lim = 50;
+        iss >> lim;
+        cmdSyslog(lim > 0 ? lim : 50);
     } else if (cmd == "quit" || cmd == "exit") {
         return -1;
     } else {
@@ -295,6 +360,196 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
     }
 
     return 0;
+}
+
+bool NetMonShell::isAuthenticated() const {
+    if (_sessionToken.empty()) {
+        return false;
+    }
+    return AuthManager::getInstance().validateSession(_sessionToken);
+}
+
+void NetMonShell::cmdAuthLogin(const std::string &password) {
+    if (password.empty()) {
+        std::cout << "Usage: auth login <password>" << std::endl;
+        return;
+    }
+    std::string token = AuthManager::getInstance().login(password);
+    if (token.empty()) {
+        std::cout << "Authentication failed: invalid password." << std::endl;
+    } else {
+        _sessionToken = token;
+        std::cout << "Authenticated successfully. Session active (15-min idle timeout)." << std::endl;
+    }
+}
+
+void NetMonShell::cmdAuthSetPassword(const std::string &currentPass, const std::string &newPass) {
+    if (newPass.empty()) {
+        std::cout << "Usage: auth set-password <current_password> <new_password>" << std::endl;
+        return;
+    }
+    if (AuthManager::getInstance().setPassword(newPass, currentPass, true)) {
+        std::cout << "Admin password changed successfully. Previous sessions revoked." << std::endl;
+        _sessionToken = AuthManager::getInstance().login(newPass);
+    } else {
+        std::cout << "Failed to change password. Current password incorrect or new password empty." << std::endl;
+    }
+}
+
+void NetMonShell::cmdPolicy(const std::string &mode) {
+    if (mode.empty()) {
+        PolicyMode current = SecurityCheckpoint::getInstance().getPolicyMode();
+        std::cout << "Current security policy mode: "
+                  << SecurityCheckpoint::policyModeToString(current) << std::endl;
+        return;
+    }
+    if (!isAuthenticated()) {
+        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
+        return;
+    }
+    PolicyMode m = SecurityCheckpoint::stringToPolicyMode(mode);
+    SecurityCheckpoint::getInstance().setPolicyMode(m);
+    std::cout << "Security policy mode updated to: "
+              << SecurityCheckpoint::policyModeToString(m) << std::endl;
+}
+
+void NetMonShell::cmdPending() {
+    if (!isAuthenticated()) {
+        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
+        return;
+    }
+    auto tickets = SecurityCheckpoint::getInstance().getPendingTickets("pending");
+    if (tickets.empty()) {
+        std::cout << "No pending action tickets in queue." << std::endl;
+        return;
+    }
+    std::cout << "----------------------------------------------------------------------------------" << std::endl;
+    std::cout << std::left << std::setw(6) << "ID"
+              << std::setw(12) << "CREATED"
+              << std::setw(12) << "REQUESTER"
+              << std::setw(22) << "TOOL"
+              << "PAYLOAD" << std::endl;
+    std::cout << "----------------------------------------------------------------------------------" << std::endl;
+    for (const auto &t : tickets) {
+        std::cout << std::left << std::setw(6) << t.id
+                  << std::setw(12) << formatRelativeTime(t.createdAt)
+                  << std::setw(12) << t.requester
+                  << std::setw(22) << t.tool
+                  << t.payload << std::endl;
+    }
+    std::cout << "----------------------------------------------------------------------------------" << std::endl;
+}
+
+void NetMonShell::cmdApprove(int64_t id) {
+    if (!isAuthenticated()) {
+        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
+        return;
+    }
+    if (id <= 0) {
+        std::cout << "Usage: approve <ticket_id>" << std::endl;
+        return;
+    }
+    std::string outErr;
+    if (SecurityCheckpoint::getInstance().approve(id, outErr)) {
+        std::cout << "Ticket #" << id << " successfully approved and executed on router." << std::endl;
+    } else {
+        std::cout << "Approval failed for ticket #" << id << ": " << outErr << std::endl;
+    }
+}
+
+void NetMonShell::cmdDeny(int64_t id, const std::string &reason) {
+    if (!isAuthenticated()) {
+        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
+        return;
+    }
+    if (id <= 0) {
+        std::cout << "Usage: deny <ticket_id> [reason]" << std::endl;
+        return;
+    }
+    std::string r = reason.empty() ? "Rejected by operator" : reason;
+    if (SecurityCheckpoint::getInstance().deny(id, r)) {
+        std::cout << "Ticket #" << id << " denied. (" << r << ")" << std::endl;
+    } else {
+        std::cout << "Failed to deny ticket #" << id << " (not in pending state or does not exist)." << std::endl;
+    }
+}
+
+void NetMonShell::cmdReconcile(int64_t id, const std::string &action) {
+    if (!isAuthenticated()) {
+        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
+        return;
+    }
+    if (id <= 0 || (action != "applied" && action != "retry")) {
+        std::cout << "Usage: reconcile <ticket_id> <applied|retry>" << std::endl;
+        return;
+    }
+    std::string outErr;
+    if (SecurityCheckpoint::getInstance().reconcile(id, action, outErr)) {
+        std::cout << "Ticket #" << id << " reconciled as: " << action << std::endl;
+    } else {
+        std::cout << "Reconciliation failed: " << outErr << std::endl;
+    }
+}
+
+void NetMonShell::cmdAudit(size_t limit) {
+    if (!isAuthenticated()) {
+        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
+        return;
+    }
+    auto records = SnmpDatabase::getInstance().getAllAuditOutbox();
+    if (records.empty()) {
+        std::cout << "No audit records found in SQLite authority." << std::endl;
+        return;
+    }
+    size_t count = (limit < records.size()) ? limit : records.size();
+    size_t start = records.size() - count;
+    std::cout << "----------------------------------------------------------------------------------" << std::endl;
+    std::cout << std::left << std::setw(6) << "SEQ"
+              << std::setw(12) << "TIME"
+              << std::setw(10) << "DECISION"
+              << std::setw(20) << "TOOL"
+              << "REASON" << std::endl;
+    std::cout << "----------------------------------------------------------------------------------" << std::endl;
+    for (size_t i = start; i < records.size(); ++i) {
+        const auto &r = records[i];
+        std::cout << std::left << std::setw(6) << r.sequence
+                  << std::setw(12) << formatRelativeTime(r.timestamp)
+                  << std::setw(10) << r.decision
+                  << std::setw(20) << r.tool
+                  << r.reason << std::endl;
+    }
+    std::cout << "----------------------------------------------------------------------------------" << std::endl;
+}
+
+void NetMonShell::cmdSyslog(size_t limit) {
+    if (!isAuthenticated()) {
+        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
+        return;
+    }
+    auto events = SnmpDatabase::getInstance().getSyslogEvents(limit);
+    if (events.empty()) {
+        std::cout << "No syslog events logged." << std::endl;
+        return;
+    }
+    std::cout << "----------------------------------------------------------------------------------" << std::endl;
+    std::cout << std::left << std::setw(6) << "ID"
+              << std::setw(12) << "TIME"
+              << std::setw(16) << "SOURCE"
+              << std::setw(6) << "PRI"
+              << std::setw(16) << "TAG"
+              << std::setw(8) << "TIME_ADJ"
+              << "MESSAGE" << std::endl;
+    std::cout << "----------------------------------------------------------------------------------" << std::endl;
+    for (const auto &e : events) {
+        std::cout << std::left << std::setw(6) << e.id
+                  << std::setw(12) << formatRelativeTime(e.timestamp)
+                  << std::setw(16) << e.sourceIp
+                  << std::setw(6) << (e.facility * 8 + e.severity)
+                  << std::setw(16) << e.tag
+                  << std::setw(8) << (e.timeAdjacent ? "YES" : "NO")
+                  << e.message << std::endl;
+    }
+    std::cout << "----------------------------------------------------------------------------------" << std::endl;
 }
 
 void NetMonShell::runInteractive() {
@@ -318,6 +573,11 @@ void NetMonShell::runInteractive() {
 
 void NetMonShell::stop() {
     _running.store(false);
+}
+
+void NetMonShell::resetForTesting() {
+    _running.store(false);
+    std::string().swap(_sessionToken);
 }
 
 /*

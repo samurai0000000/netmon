@@ -174,7 +174,7 @@ void AimonGatewayClient::sendResponse(const std::string &msg) {
     }
 }
 
-bool AimonGatewayClient::sendRegistration() {
+json AimonGatewayClient::getRegistrationJson(uint16_t webPort) {
     json reg = {
         {"jsonrpc", "2.0"},
         {"method", "gateway/register"},
@@ -184,7 +184,7 @@ bool AimonGatewayClient::sendRegistration() {
             {"display_name", "Network Monitor"},
             {"short_name", "NetMon"},
             {"priority", 10},
-            {"web_port", _webPort > 0 ? _webPort : 3884},
+            {"web_port", webPort > 0 ? webPort : 3884},
             {"web_path", "/"},
             {"description", "Local Area Network (LAN) monitor, packet sniffer, and firewall telemetry engine"},
             {"tools", json::array({
@@ -378,6 +378,11 @@ bool AimonGatewayClient::sendRegistration() {
         }}
     };
 
+    return reg;
+}
+
+bool AimonGatewayClient::sendRegistration() {
+    json reg = getRegistrationJson(_webPort > 0 ? _webPort : 3884);
     sendResponse(reg.dump());
     return true;
 }
@@ -427,14 +432,14 @@ void AimonGatewayClient::processIncoming() {
     }
 }
 
-void AimonGatewayClient::handleRequest(const std::string &line) {
+std::string AimonGatewayClient::dispatchRequest(const std::string &line) {
     try {
         json req = json::parse(line);
         if (!req.contains("id")) {
-            return;
+            return "";
         }
         if (req.contains("result") || req.contains("error")) {
-            return;
+            return "";
         }
 
         auto reqId = req["id"];
@@ -501,8 +506,7 @@ void AimonGatewayClient::handleRequest(const std::string &line) {
                         {"message", "Unknown tool: " + toolName}
                     }}
                 };
-                sendResponse(errResp.dump());
-                return;
+                return errResp.dump();
             }
 
             json resp = {
@@ -517,7 +521,7 @@ void AimonGatewayClient::handleRequest(const std::string &line) {
                     })}
                 }}
             };
-            sendResponse(resp.dump());
+            return resp.dump();
         } else {
             json errResp = {
                 {"jsonrpc", "2.0"},
@@ -527,10 +531,18 @@ void AimonGatewayClient::handleRequest(const std::string &line) {
                     {"message", "Unknown method: " + method}
                 }}
             };
-            sendResponse(errResp.dump());
+            return errResp.dump();
         }
     } catch (const std::exception &ex) {
         std::cerr << "AimonGatewayClient: Error handling JSON-RPC: " << ex.what() << std::endl;
+        return "";
+    }
+}
+
+void AimonGatewayClient::handleRequest(const std::string &line) {
+    std::string resp = dispatchRequest(line);
+    if (!resp.empty()) {
+        sendResponse(resp);
     }
 }
 
@@ -652,53 +664,15 @@ std::string AimonGatewayClient::toolFirewallGetSessions() {
 }
 
 std::string AimonGatewayClient::toolFirewallBlockIp(const std::string &ip, const std::string &reason) {
-    std::string errReason;
-    bool permitted = SecurityCheckpoint::getInstance().validateBlockRequest(ip, errReason);
-    SecurityCheckpoint::getInstance().logAudit("firewall_block_ip", "ai_agent",
-                                               "ip=" + ip + ", reason=" + reason, permitted, errReason);
-
-    if (!permitted) {
-        json err = {
-            {"status", "denied"},
-            {"target_ip", ip},
-            {"reason", errReason}
-        };
-        return err.dump(2);
-    }
-
-    if (_routerDriver) {
-        return _routerDriver->blockIp(ip, reason).dump(2);
-    }
-
-    json unconf = {
-        {"status", "unconfigured"},
-        {"error", "Router driver not configured"}
-    };
-    return unconf.dump(2);
+    json payload = {{"ip", ip}, {"reason", reason}};
+    json res = SecurityCheckpoint::getInstance().handleAgentMutation("firewall_block_ip", "ai_agent", payload);
+    return res.dump(2);
 }
 
 std::string AimonGatewayClient::toolFirewallUnblockIp(const std::string &ip) {
-    if (SecurityCheckpoint::getInstance().isIpProtected(ip)) {
-        json err = {
-            {"status", "denied"},
-            {"target_ip", ip},
-            {"reason", "Cannot modify protected core infrastructure invariant"}
-        };
-        return err.dump(2);
-    }
-
-    SecurityCheckpoint::getInstance().logAudit("firewall_unblock_ip", "ai_agent",
-                                               "ip=" + ip, true, "Permitted");
-
-    if (_routerDriver) {
-        return _routerDriver->unblockIp(ip).dump(2);
-    }
-
-    json unconf = {
-        {"status", "unconfigured"},
-        {"error", "Router driver not configured"}
-    };
-    return unconf.dump(2);
+    json payload = {{"ip", ip}};
+    json res = SecurityCheckpoint::getInstance().handleAgentMutation("firewall_unblock_ip", "ai_agent", payload);
+    return res.dump(2);
 }
 
 std::string AimonGatewayClient::toolSnmpGetDeviceMetrics(const std::string &targetIp, const std::string &filter) {

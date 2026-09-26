@@ -8,3 +8,4 @@ build/
 .agents
 plan/*
 !plan/done/
+test_data/

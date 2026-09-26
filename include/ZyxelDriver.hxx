@@ -11,6 +11,8 @@
 
 class ZyxelDriver : public RouterDriver {
 public:
+    static ZyxelDriver &getInstance();
+
     ZyxelDriver();
     virtual ~ZyxelDriver() override = default;
 

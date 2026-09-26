@@ -8,13 +8,16 @@ SHELL := /bin/bash
 BUILD_DIR := build
 NUM_PROCS := $(shell nproc 2>/dev/null || echo 4)
 
-.PHONY: all clean distclean submodules setcap
+.PHONY: all test clean distclean submodules setcap
 
 all: submodules
 	@mkdir -p $(BUILD_DIR)
 	@cd $(BUILD_DIR) && (test -f Makefile || cmake .. -DCMAKE_BUILD_TYPE=Release)
 	@$(MAKE) -C $(BUILD_DIR) -j$(NUM_PROCS)
 	@-sudo -n setcap cap_net_raw=eip $(BUILD_DIR)/netmon 2>/dev/null || true
+
+test: all
+	@cmake --build $(BUILD_DIR) --target test
 
 submodules:
 	@if [ -f .gitmodules ] && ([ ! -f third_party/json/include/nlohmann/json.hpp ] || [ ! -f third_party/cpp-httplib/httplib.h ]); then \

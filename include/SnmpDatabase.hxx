@@ -39,6 +39,42 @@ struct SnmpHourlyRollup {
     double      totalGbOut = 0.0;
 };
 
+struct PendingAction {
+    int64_t     id = 0;
+    int64_t     createdAt = 0;
+    int64_t     expiresAt = 0;
+    std::string requester;
+    std::string tool;
+    std::string payload;
+    std::string status; // pending, executing, approved, denied, expired, interrupted
+};
+
+struct AuditOutboxRecord {
+    int64_t     sequence = 0;
+    int64_t     timestamp = 0;
+    std::string prevHash;
+    int64_t     actionId = 0;
+    std::string tool;
+    std::string requester;
+    std::string payload;
+    std::string decision;
+    std::string reason;
+    int         exported = 0;
+};
+
+struct SyslogEvent {
+    int64_t     id = 0;
+    int64_t     timestamp = 0;
+    std::string sourceIp;
+    int         facility = 0;
+    int         severity = 0;
+    std::string tag;
+    std::string message;
+    bool        timeAdjacent = false;
+    int64_t     adjacentAuditSeq = 0;
+    std::string raw;
+};
+
 class SnmpDatabase {
 public:
     static SnmpDatabase &getInstance();
@@ -71,6 +107,36 @@ public:
     // Maintenance & Pruning
     size_t rollupAndPrune(int rawRetentionDays = 90);
     int64_t getDatabaseSizeBytes() const;
+
+    // Security Policy
+    bool setPolicyMode(const std::string &mode);
+    std::string getPolicyMode();
+
+    // Pending Actions Queue
+    int64_t insertPendingAction(const PendingAction &action);
+    bool getPendingAction(int64_t id, PendingAction &outAction);
+    std::vector<PendingAction> listPendingActions(const std::string &statusFilter = "");
+
+    // Atomic execution transitions
+    bool claimPendingAction(int64_t id, int64_t nowTime, PendingAction &outAction);
+    bool commitActionApproved(int64_t id, const std::string &prevHash, const std::string &reason, AuditOutboxRecord &outAudit);
+    bool commitActionFailed(int64_t id, const std::string &prevHash, const std::string &reason, AuditOutboxRecord &outAudit);
+    bool commitActionDenied(int64_t id, const std::string &prevHash, const std::string &reason, AuditOutboxRecord &outAudit);
+    bool reconcileAction(int64_t id, const std::string &reconcileMode, const std::string &prevHash, AuditOutboxRecord &outAudit);
+    void recoverExecutingActionsOnStartup();
+
+    // Audit Outbox
+    int64_t insertAuditOutbox(const AuditOutboxRecord &record);
+    bool getLastAuditOutbox(AuditOutboxRecord &outRecord);
+    std::vector<AuditOutboxRecord> getUnexportedAuditOutbox();
+    bool markAuditOutboxExported(int64_t upToSequence);
+    std::vector<AuditOutboxRecord> getAllAuditOutbox();
+
+    // Syslog Ingestion & Query
+    int64_t insertSyslogEvent(SyslogEvent &event);
+    std::vector<SyslogEvent> getSyslogEvents(size_t limit = 50, int64_t sinceTimestamp = 0);
+
+    sqlite3 *getHandle() const { return _db; }
 
 private:
     SnmpDatabase();

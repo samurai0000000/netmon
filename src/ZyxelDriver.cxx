@@ -6,6 +6,11 @@
 
 #include "ZyxelDriver.hxx"
 
+ZyxelDriver &ZyxelDriver::getInstance() {
+    static ZyxelDriver instance;
+    return instance;
+}
+
 ZyxelDriver::ZyxelDriver()
     : _configured(false) {
 }
