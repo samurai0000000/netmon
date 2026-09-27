@@ -23,6 +23,7 @@
 #include "NetMonShell.hxx"
 #include "AuthManager.hxx"
 #include "SyslogServer.hxx"
+#include <libssh2.h>
 
 static volatile sig_atomic_t g_shutdownRequested = 0;
 
@@ -64,6 +65,9 @@ static void printUsage(const char *progName) {
 }
 
 int main(int argc, char **argv) {
+    // Process-global libssh2 initialization
+    libssh2_init(0);
+
     // Crucial: ignore SIGPIPE to prevent crashes during terminal disconnection or screen detach
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, signalHandler);
@@ -207,9 +211,15 @@ int main(int argc, char **argv) {
     // Start UDP syslog receiver for router logs
     SyslogServer::getInstance().start();
 
-    // Initialize router driver (stubs until hardware credentials configured)
-    auto zyxel = std::make_shared<ZyxelDriver>();
-    AimonGatewayClient::getInstance().setRouterDriver(zyxel);
+    // Initialize router driver singleton
+    if (!Config::getInstance().getSnmpTargets().empty() && !Config::getInstance().getRouterUser().empty()) {
+        std::string routerIp = Config::getInstance().getSnmpTargets()[0].ip;
+        std::string routerUser = Config::getInstance().getRouterUser();
+        ZyxelDriver::getInstance().configure(routerIp, 22, routerUser);
+    }
+    ZyxelDriver::getInstance().start();
+    AimonGatewayClient::getInstance().setRouterDriver(
+        std::shared_ptr<RouterDriver>(&ZyxelDriver::getInstance(), [](RouterDriver *) {}));
 
     // Start gateway client to aimon hub
     AimonGatewayClient::getInstance().setWebPort(WebServer::getInstance().getPort());
@@ -234,12 +244,15 @@ int main(int argc, char **argv) {
     AimonGatewayClient::getInstance().stop();
     DnsResolver::getInstance().stop();
     MacVendorResolver::getInstance().stop();
+    ZyxelDriver::getInstance().stop();
 
     SyslogServer::getInstance().join();
     WebServer::getInstance().join();
     SnmpAggregator::getInstance().join();
     AimonGatewayClient::getInstance().join();
     SnmpDatabase::getInstance().close();
+
+    libssh2_exit();
 
     std::cout << "NetMon shutdown complete." << std::endl;
     return 0;

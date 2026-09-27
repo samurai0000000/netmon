@@ -5,6 +5,8 @@
  */
 
 #include <iostream>
+#include <filesystem>
+#include <cstdlib>
 #include <thread>
 #include <chrono>
 
@@ -25,11 +27,22 @@
 #include "NetMonShell.hxx"
 #include "SyslogServer.hxx"
 #include "AuthManager.hxx"
+#include "RecordingRouter.hxx"
 
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/MemoryLeakWarningPlugin.h>
 
+namespace fs = std::filesystem;
+
 int main(int argc, char **argv) {
+    // Point HOME to temporary directory under test_data/ to guard against touching real home
+    std::string testHome = "test_data/test_home_main";
+    if (fs::exists(testHome)) {
+        fs::remove_all(testHome);
+    }
+    fs::create_directories(testHome);
+    setenv("HOME", fs::absolute(testHome).string().c_str(), 1);
+
     // Enable thread-safe new/delete overloads for CppUTest memory leak detector
     MemoryLeakWarningPlugin::turnOnThreadSafeNewDeleteOverloads();
 
@@ -63,6 +76,7 @@ int main(int argc, char **argv) {
     NetMonShell::getInstance();
     SyslogServer::getInstance();
     AuthManager::getInstance();
+    RecordingRouter::getInstance();
 
     {
         httplib::Server warmupServer;
@@ -93,7 +107,13 @@ int main(int argc, char **argv) {
         }
     }
 
-    return CommandLineTestRunner::RunAllTests(argc, argv);
+    int result = CommandLineTestRunner::RunAllTests(argc, argv);
+
+    if (fs::exists(testHome)) {
+        fs::remove_all(testHome);
+    }
+
+    return result;
 }
 
 /*

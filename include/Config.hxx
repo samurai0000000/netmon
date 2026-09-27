@@ -65,9 +65,6 @@ public:
     const std::string &getRouterUser() const;
     void setRouterUser(const std::string &user);
 
-    const std::string &getRouterPassword() const;
-    void setRouterPassword(const std::string &pass);
-
     const std::string &getRouterKeyPath() const;
     void setRouterKeyPath(const std::string &path);
 
@@ -96,8 +93,18 @@ public:
     bool isWebEnabled() const;
     void setWebEnabled(bool enabled);
 
+    bool getRouterDryRun() const;
+    void setRouterDryRun(bool enable);
+
+    bool getRouterLiveEnabled() const;
+    void setRouterLiveEnabled(bool enable);
+
+    bool getRouterFlashWrite() const;
+    void setRouterFlashWrite(bool enable);
+
     const std::string &getConfigPath() const;
     static std::string resolveHomePath(const std::string &path);
+    void resetForTesting();
 
 private:
     Config();
@@ -115,8 +122,10 @@ private:
     bool        _allowAiBlockIp;
     bool        _allowAiRawExec;
     std::string _routerUser;
-    std::string _routerPassword;
     std::string _routerKeyPath;
+    bool        _routerDryRun;
+    bool        _routerLiveEnabled;
+    bool        _routerFlashWrite;
 
     int         _snmpPollIntervalSec;
     std::vector<SnmpTargetConfig> _snmpTargets;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(netmon VERSION 1.0.4 LANGUAGES CXX)
+project(netmon VERSION 1.0.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -54,6 +54,7 @@ pkg_check_modules(PCAP REQUIRED libpcap)
 pkg_check_modules(NETSNMP REQUIRED netsnmp)
 pkg_check_modules(SQLITE3 REQUIRED sqlite3)
 pkg_check_modules(OPENSSL REQUIRED openssl)
+pkg_check_modules(LIBSSH2 REQUIRED libssh2)
 pkg_check_modules(CPPUTEST REQUIRED cpputest)
 
 add_compile_definitions(CPPHTTPLIB_OPENSSL_SUPPORT)
@@ -69,6 +70,7 @@ set(SOURCES
     src/DeviceRegistry.cxx
     src/LanSniffer.cxx
     src/ZyxelDriver.cxx
+    src/ZyxelSshClient.cxx
     src/SnmpAggregator.cxx
     src/SnmpDatabase.cxx
     src/WebServer.cxx
@@ -91,6 +93,7 @@ target_include_directories(netmon PRIVATE
     ${NETSNMP_INCLUDE_DIRS}
     ${SQLITE3_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIRS}
+    ${LIBSSH2_INCLUDE_DIRS}
 )
 
 target_link_libraries(netmon PRIVATE
@@ -100,6 +103,7 @@ target_link_libraries(netmon PRIVATE
     ${NETSNMP_LIBRARIES}
     ${SQLITE3_LIBRARIES}
     ${OPENSSL_LIBRARIES}
+    ${LIBSSH2_LIBRARIES}
 )
 
 if(CONFIGPP_LIBRARY_DIRS)
@@ -117,12 +121,16 @@ endif()
 if(OPENSSL_LIBRARY_DIRS)
     target_link_directories(netmon PRIVATE ${OPENSSL_LIBRARY_DIRS})
 endif()
+if(LIBSSH2_LIBRARY_DIRS)
+    target_link_directories(netmon PRIVATE ${LIBSSH2_LIBRARY_DIRS})
+endif()
 
 # Test suite executable
 set(TEST_SOURCES
     test/TestMain.cxx
     test/RecordingRouter.cxx
     test/TestAuthManager.cxx
+    test/TestCredentialVault.cxx
     test/TestApprovalQueue.cxx
     test/TestAuditTrail.cxx
     test/TestSyslogIngest.cxx
@@ -141,6 +149,7 @@ set(TEST_SOURCES
     src/AimonGatewayClient.cxx
     src/NetMonShell.cxx
     src/SyslogServer.cxx
+    src/ZyxelSshClient.cxx
 )
 
 add_executable(test_netmon_suite ${TEST_SOURCES})
@@ -156,6 +165,7 @@ target_include_directories(test_netmon_suite PRIVATE
     ${NETSNMP_INCLUDE_DIRS}
     ${SQLITE3_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIRS}
+    ${LIBSSH2_INCLUDE_DIRS}
     ${CPPUTEST_INCLUDE_DIRS}
 )
 
@@ -166,6 +176,7 @@ target_link_libraries(test_netmon_suite PRIVATE
     ${NETSNMP_LIBRARIES}
     ${SQLITE3_LIBRARIES}
     ${OPENSSL_LIBRARIES}
+    ${LIBSSH2_LIBRARIES}
     ${CPPUTEST_LIBRARIES}
 )
 
@@ -184,11 +195,76 @@ endif()
 if(OPENSSL_LIBRARY_DIRS)
     target_link_directories(test_netmon_suite PRIVATE ${OPENSSL_LIBRARY_DIRS})
 endif()
+if(LIBSSH2_LIBRARY_DIRS)
+    target_link_directories(test_netmon_suite PRIVATE ${LIBSSH2_LIBRARY_DIRS})
+endif()
 if(CPPUTEST_LIBRARY_DIRS)
     target_link_directories(test_netmon_suite PRIVATE ${CPPUTEST_LIBRARY_DIRS})
 endif()
 
+# Dedicated live driver & parser test suite executable
+set(ZYXEL_TEST_SOURCES
+    test/TestZyxelMain.cxx
+    test/TestZyxelSshClient.cxx
+    test/TestZyxelDriver.cxx
+    src/ZyxelDriver.cxx
+    src/ZyxelSshClient.cxx
+    src/AuthManager.cxx
+    src/Config.cxx
+)
+
+add_executable(test_zyxel_driver_suite ${ZYXEL_TEST_SOURCES})
+
+target_include_directories(test_zyxel_driver_suite PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cpp-httplib
+    ${CONFIGPP_INCLUDE_DIRS}
+    ${PCAP_INCLUDE_DIRS}
+    ${NETSNMP_INCLUDE_DIRS}
+    ${SQLITE3_INCLUDE_DIRS}
+    ${OPENSSL_INCLUDE_DIRS}
+    ${LIBSSH2_INCLUDE_DIRS}
+    ${CPPUTEST_INCLUDE_DIRS}
+)
+
+target_link_libraries(test_zyxel_driver_suite PRIVATE
+    Threads::Threads
+    ${CONFIGPP_LIBRARIES}
+    ${PCAP_LIBRARIES}
+    ${NETSNMP_LIBRARIES}
+    ${SQLITE3_LIBRARIES}
+    ${OPENSSL_LIBRARIES}
+    ${LIBSSH2_LIBRARIES}
+    ${CPPUTEST_LIBRARIES}
+)
+
+if(CONFIGPP_LIBRARY_DIRS)
+    target_link_directories(test_zyxel_driver_suite PRIVATE ${CONFIGPP_LIBRARY_DIRS})
+endif()
+if(PCAP_LIBRARY_DIRS)
+    target_link_directories(test_zyxel_driver_suite PRIVATE ${PCAP_LIBRARY_DIRS})
+endif()
+if(NETSNMP_LIBRARY_DIRS)
+    target_link_directories(test_zyxel_driver_suite PRIVATE ${NETSNMP_LIBRARY_DIRS})
+endif()
+if(SQLITE3_LIBRARY_DIRS)
+    target_link_directories(test_zyxel_driver_suite PRIVATE ${SQLITE3_LIBRARY_DIRS})
+endif()
+if(OPENSSL_LIBRARY_DIRS)
+    target_link_directories(test_zyxel_driver_suite PRIVATE ${OPENSSL_LIBRARY_DIRS})
+endif()
+if(LIBSSH2_LIBRARY_DIRS)
+    target_link_directories(test_zyxel_driver_suite PRIVATE ${LIBSSH2_LIBRARY_DIRS})
+endif()
+if(CPPUTEST_LIBRARY_DIRS)
+    target_link_directories(test_zyxel_driver_suite PRIVATE ${CPPUTEST_LIBRARY_DIRS})
+endif()
+
 add_custom_target(test
     COMMAND test_netmon_suite -v
-    DEPENDS test_netmon_suite
+    COMMAND test_zyxel_driver_suite -v
+    DEPENDS test_netmon_suite test_zyxel_driver_suite
 )

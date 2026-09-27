@@ -259,6 +259,39 @@ The `SecurityCheckpoint` enforces hard safety boundaries on all AI agent invocat
 
 ---
 
+### 3.8 Zyxel USG Driver (Experimental / Live Unqualified)
+
+`ZyxelDriver` and `ZyxelSshClient` provide local state machine and SSH driver logic for Zyxel USG series firewalls:
+- **Operational Status & Validation Boundaries**:
+  - **Status**: **Experimental / Disabled by Default / Live Unqualified**.
+  - **Unit Test Coverage**: Automated unit test suites (`CppUTest`) validate local in-memory state transitions, PTY stream parsing, prompt regexes, and rollback journaling only. They do **not** execute live ZySH commands on physical router hardware.
+  - **Live Hardware Qualification**: Flash persistence (`write`), config-lock contention, and startup recovery replay remain pending manual transcript validation and controlled hardware qualification on physical USG hardware.
+- **Default Configuration Safeguards**:
+  - `router_live_enabled = false` (default in `netmon.cfg`): All live network connections remain disabled; mutations are journaled locally as pending.
+  - `router_flash_write = false` (default in `netmon.cfg`): NVRAM `write` commands remain disabled.
+  - `router_dry_run = true` (configurable via `netmon.cfg` or `NETMON_ROUTER_DRY_RUN`): Emits synthetic `[router-dry-run]` command logs to stderr and records transcripts for verification without network access.
+- **Encrypted Vault Storage Only**:
+  - Router credentials are stored exclusively in `AuthManager`'s AES-256-GCM encrypted vault (`~/.config/netmon/vault.enc`) with companion master key `~/.config/netmon/vault.key` (`0600` permissions).
+  - Plaintext password config fields and `NETMON_ROUTER_PASSWORD` environment overrides are not supported and are excluded from the design.
+  - Interactive zero-leak provisioning is performed via `router set-password` CLI command with terminal echo disabled.
+- **Interactive PTY Session Engine**:
+  - Allocates a 256-column PTY terminal preventing arbitrary line wraps.
+  - Enforces 5000ms blocking timeouts and automatic `--More--` pager stream advancement.
+  - Tail-anchored prompt detection matching user exec (`Router>`), privileged exec (`Router#`), config (`Router(config)#`), and submode contexts (`Router(config-policy-control)#`).
+  - ANSI escape code stripping and command echo removal.
+  - Automatic 5x `exit` unwind recovery to restore root prompt `#` on unexpected submode traps.
+- **Durable On-Disk Mutation Journaling (`router_journal.json`)**:
+  - Every block and unblock mutation is journaled atomically to `~/.config/netmon/router_journal.json` (`0600` permissions) before dispatch.
+  - Replay and reconciliation logic tracks row states (`pending` vs `applied_running`).
+- **30-Second Debounced Flash Protection**:
+  - Rapid block/unblock cycles are debounced across a 30-second window before committing to router NVRAM (`write`).
+- **Reference-Ordered Rollback Engine**:
+  - Clean transactional teardown in exact reverse reference order (`no policy-control` before `no address-object`) if command sequence fails midway.
+- **Trust On First Use (TOFU) Host-Key Pinning**:
+  - Router SSH server public key SHA-256 fingerprint pinned to `~/.config/netmon/router_hostkey.pin` (`0600` permissions), protecting against man-in-the-middle attacks.
+
+---
+
 ## 4. Exported MCP Toolset via `aimon` Gateway
 
 | Tool Name | Status | Functionality |
@@ -268,10 +301,10 @@ The `SecurityCheckpoint` enforces hard safety boundaries on all AI agent invocat
 | **`lan_name_device`** | **Active** | Allows an operator or AI assistant to assign a friendly name and category to a MAC address, persisting it to `devices.cfg`. |
 | **`lan_get_top_talkers`** | **Active** | Returns the top bandwidth-consuming internal hosts over a time window (15m, 1h, 24h) with transfer rates directly from RAM. |
 | **`lan_get_traffic_summary`** | **Active** | Returns total LAN throughput, packet rates, and protocol distribution (DNS, HTTPS, SSH, ARP, broadcast). |
-| **`firewall_get_status`** | **Stub** | Returns router model, firmware, link states (currently stubbed: *"Router not configured in netmon.cfg"*). |
-| **`firewall_get_sessions`** | **Stub** | Queries active firewall session table (currently stubbed). |
-| **`firewall_block_ip`** | **Stub (Gated)** | Inserts a firewall drop rule, validated against protected subnets (currently stubbed). |
-| **`firewall_unblock_ip`** | **Stub (Gated)** | Removes a firewall drop rule (currently stubbed). |
+| **`firewall_get_status`** | **Experimental / Live Unqualified (Disabled by Default)** | Returns router model, firmware, uptime, and SSH link state when live mode is enabled. |
+| **`firewall_get_sessions`** | **Experimental / Live Unqualified (Disabled by Default)** | Queries active firewall session table and connection counts when live mode is enabled. |
+| **`firewall_block_ip`** | **Experimental / Live Unqualified (Disabled by Default)** | Enqueues and applies firewall drop rule and address object via SSH automation (checked against safety invariants). |
+| **`firewall_unblock_ip`** | **Experimental / Live Unqualified (Disabled by Default)** | Enqueues and removes firewall drop rule and address object via SSH automation. |
 | **`snmp_get_wan_status`** | **Active** | Dedicated dual-WAN uplink bandwidth rates, 5-minute averages, 24-hour peaks, and daily GB transfers. |
 | **`snmp_get_device_metrics`** | **Active** | SNMP metrics, system description, uptime, and 3-tier filtered interfaces for switches and routers. |
 | **`snmp_get_interface_counters`** | **Active** | Line speeds, 64-bit HC octet counters, and packet error counts for specific ports. |
@@ -307,8 +340,10 @@ The `SecurityCheckpoint` enforces hard safety boundaries on all AI agent invocat
 
 ## 6. Verification Plan
 
-1. **Native Compilation**:
+1. **Native Compilation & Automated Unit Test Suites**:
    - Build cleanly with zero compiler warnings via `make -j$(nproc)`.
+   - Run `make test` verifying local state machine, parser, vault, and database suites.
+   - Note: Automated test suites validate in-memory state and PTY parsing only; live ZySH execution on hardware is not exercised by `make test`.
 2. **Capability Preflight**:
    - Verify `./build/netmon status` reports active capture permissions.
 3. **Gateway Registration**:
@@ -318,7 +353,9 @@ The `SecurityCheckpoint` enforces hard safety boundaries on all AI agent invocat
    - Query `lan_get_unregistered_devices` via MCP: Verify unregistered device identification and OUI resolution.
    - Call `lan_name_device` via MCP: Verify dynamic update and persistence to `devices.cfg`.
    - Query `lan_get_top_talkers` and `lan_get_traffic_summary` via MCP: Verify real-time bandwidth and protocol metrics.
-   - Test stub tools (`firewall_get_status`, `snmp_get_device_metrics`): Verify clean `"Not configured"` responses without crashing.
+   - Test stub/disabled tools (`firewall_get_status`, `snmp_get_device_metrics`): Verify clean disabled/unconfigured responses without crashing.
+5. **Physical Hardware Qualification (Future)**:
+   - Controlled live qualification on physical USG hardware remains pending manual transcript validation.
 
 ---
 

@@ -18,6 +18,32 @@
 #include <vector>
 #include <ctime>
 #include <unistd.h>
+#include <termios.h>
+
+static std::string readPasswordInteractive(const std::string &prompt) {
+    std::cout << prompt << std::flush;
+    std::string password;
+
+    if (isatty(STDIN_FILENO)) {
+        struct termios oldt, newt;
+        tcgetattr(STDIN_FILENO, &oldt);
+        newt = oldt;
+        newt.c_lflag &= ~ECHO;
+        tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+
+        std::getline(std::cin, password);
+
+        tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+        std::cout << std::endl;
+    } else {
+        std::getline(std::cin, password);
+    }
+
+    while (!password.empty() && (password.back() == '\r' || password.back() == '\n')) {
+        password.pop_back();
+    }
+    return password;
+}
 
 NetMonShell &NetMonShell::getInstance() {
     static NetMonShell instance;
@@ -80,6 +106,8 @@ void NetMonShell::printHelp() const {
     std::cout << "  reload                       Reload configuration and devices registry" << std::endl;
     std::cout << "  auth login <password>        Authenticate local operator session" << std::endl;
     std::cout << "  auth set-password <old> <new>Change admin password (requires old password)" << std::endl;
+    std::cout << "  router set-password          Store router password interactively in encrypted vault" << std::endl;
+    std::cout << "  router clear-password        Clear router password from encrypted vault" << std::endl;
     std::cout << "  policy [mode]                View or update policy (disabled, dry_run, require_approval, live)" << std::endl;
     std::cout << "  pending                      List actions awaiting operator approval" << std::endl;
     std::cout << "  approve <id>                 Approve and execute a pending action" << std::endl;
@@ -320,6 +348,16 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
         } else {
             std::cout << "Usage: auth login <password> | auth set-password <current> <new>" << std::endl;
         }
+    } else if (cmd == "router") {
+        std::string subCmd;
+        iss >> subCmd;
+        if (subCmd == "set-password") {
+            cmdRouterSetPassword();
+        } else if (subCmd == "clear-password") {
+            cmdRouterClearPassword();
+        } else {
+            std::cout << "Usage: router set-password | router clear-password" << std::endl;
+        }
     } else if (cmd == "policy") {
         std::string mode;
         iss >> mode;
@@ -393,6 +431,32 @@ void NetMonShell::cmdAuthSetPassword(const std::string &currentPass, const std::
         _sessionToken = AuthManager::getInstance().login(newPass);
     } else {
         std::cout << "Failed to change password. Current password incorrect or new password empty." << std::endl;
+    }
+}
+
+void NetMonShell::cmdRouterSetPassword() {
+    std::string pass = readPasswordInteractive("Enter Zyxel router password: ");
+    if (pass.empty()) {
+        std::cout << "Router password cannot be empty." << std::endl;
+        return;
+    }
+    std::string confirm = readPasswordInteractive("Confirm Zyxel router password: ");
+    if (pass != confirm) {
+        std::cout << "Passwords do not match." << std::endl;
+        return;
+    }
+    if (AuthManager::getInstance().setRouterPassword(pass)) {
+        std::cout << "Router password stored securely in encrypted vault (vault.enc)." << std::endl;
+    } else {
+        std::cout << "Error: Failed to store router password in vault." << std::endl;
+    }
+}
+
+void NetMonShell::cmdRouterClearPassword() {
+    if (AuthManager::getInstance().clearRouterPassword()) {
+        std::cout << "Router password cleared from vault." << std::endl;
+    } else {
+        std::cout << "Error: Failed to clear router password from vault." << std::endl;
     }
 }
 

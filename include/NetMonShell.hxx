@@ -46,6 +46,8 @@ private:
     void cmdSyslog(size_t limit = 50);
     void cmdAuthLogin(const std::string &password);
     void cmdAuthSetPassword(const std::string &currentPass, const std::string &newPass);
+    void cmdRouterSetPassword();
+    void cmdRouterClearPassword();
     bool isAuthenticated() const;
 
     std::atomic<bool> _running;

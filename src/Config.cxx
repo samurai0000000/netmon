@@ -28,11 +28,44 @@ Config::Config()
     , _allowAiRawExec(false)
     , _snmpPollIntervalSec(30)
     , _databaseFile("~/.config/netmon/netmon_telemetry.db")
-    , _rawRetentionDays(90) {
+    , _rawRetentionDays(90)
+    , _routerDryRun(false)
+    , _routerLiveEnabled(false)
+    , _routerFlashWrite(false) {
     _webConfig.enabled = true;
     _webConfig.port = 3884;
     _webConfig.bindAddress = "0.0.0.0";
     _webConfig.endpointsEnabled = false;
+}
+
+void Config::resetForTesting() {
+    _configPath.clear();
+    _configPath.shrink_to_fit();
+    _interface = "br0";
+    _gatewayHost = "127.0.0.1";
+    _gatewayPort = 3885;
+    _reconnectIntervalSec = 5;
+    _devicesFile = "~/.config/netmon/devices.cfg";
+    _logLevel = "info";
+    _allowAiBlockIp = false;
+    _allowAiRawExec = false;
+    _routerUser.clear();
+    _routerUser.shrink_to_fit();
+    _routerKeyPath.clear();
+    _routerKeyPath.shrink_to_fit();
+    _routerDryRun = false;
+    _routerLiveEnabled = false;
+    _routerFlashWrite = false;
+    _snmpPollIntervalSec = 30;
+    _snmpTargets.clear();
+    _snmpTargets.shrink_to_fit();
+    _databaseFile = "~/.config/netmon/netmon_telemetry.db";
+    _rawRetentionDays = 90;
+    _webConfig.enabled = true;
+    _webConfig.port = 3884;
+    _webConfig.bindAddress = "0.0.0.0";
+    _webConfig.endpointsEnabled = false;
+    _webConfig.adminPort = 3886;
 }
 
 std::string Config::resolveHomePath(const std::string &path) {
@@ -90,6 +123,9 @@ bool Config::load(const std::string &customPath) {
         cfg.lookupValue("allow_ai_raw_exec", _allowAiRawExec);
         cfg.lookupValue("router_user", _routerUser);
         cfg.lookupValue("router_key_path", _routerKeyPath);
+        cfg.lookupValue("router_dry_run", _routerDryRun);
+        cfg.lookupValue("router_live_enabled", _routerLiveEnabled);
+        cfg.lookupValue("router_flash_write", _routerFlashWrite);
         cfg.lookupValue("database_file", _databaseFile);
         cfg.lookupValue("raw_retention_days", _rawRetentionDays);
     } catch (const libconfig::SettingNotFoundException &) {
@@ -156,10 +192,13 @@ bool Config::load(const std::string &customPath) {
     // Override with environment variables if present (12-factor secure credential handling)
     const char *envUser = getenv("NETMON_ROUTER_USER");
     if (envUser && *envUser) _routerUser = envUser;
-    const char *envPass = getenv("NETMON_ROUTER_PASSWORD");
-    if (envPass && *envPass) _routerPassword = envPass;
     const char *envKey = getenv("NETMON_ROUTER_KEY_PATH");
     if (envKey && *envKey) _routerKeyPath = envKey;
+    const char *envDryRun = getenv("NETMON_ROUTER_DRY_RUN");
+    if (envDryRun && *envDryRun) {
+        std::string s(envDryRun);
+        _routerDryRun = (s == "1" || s == "true" || s == "TRUE" || s == "yes");
+    }
 
     const char *envDb = getenv("NETMON_DB_PATH");
     if (envDb && *envDb) _databaseFile = envDb;
@@ -296,6 +335,24 @@ bool Config::save() {
             }
         }
 
+        if (!root.exists("router_dry_run")) {
+            root.add("router_dry_run", libconfig::Setting::TypeBoolean) = _routerDryRun;
+        } else {
+            root["router_dry_run"] = _routerDryRun;
+        }
+
+        if (!root.exists("router_live_enabled")) {
+            root.add("router_live_enabled", libconfig::Setting::TypeBoolean) = _routerLiveEnabled;
+        } else {
+            root["router_live_enabled"] = _routerLiveEnabled;
+        }
+
+        if (!root.exists("router_flash_write")) {
+            root.add("router_flash_write", libconfig::Setting::TypeBoolean) = _routerFlashWrite;
+        } else {
+            root["router_flash_write"] = _routerFlashWrite;
+        }
+
         cfg.writeFile(_configPath.c_str());
         chmod(_configPath.c_str(), 0600);
         return true;
@@ -381,14 +438,6 @@ void Config::setRouterUser(const std::string &user) {
     _routerUser = user;
 }
 
-const std::string &Config::getRouterPassword() const {
-    return _routerPassword;
-}
-
-void Config::setRouterPassword(const std::string &pass) {
-    _routerPassword = pass;
-}
-
 const std::string &Config::getRouterKeyPath() const {
     return _routerKeyPath;
 }
@@ -463,6 +512,30 @@ bool Config::isWebEnabled() const {
 
 void Config::setWebEnabled(bool enabled) {
     _webConfig.enabled = enabled;
+}
+
+bool Config::getRouterDryRun() const {
+    return _routerDryRun;
+}
+
+void Config::setRouterDryRun(bool enable) {
+    _routerDryRun = enable;
+}
+
+bool Config::getRouterLiveEnabled() const {
+    return _routerLiveEnabled;
+}
+
+void Config::setRouterLiveEnabled(bool enable) {
+    _routerLiveEnabled = enable;
+}
+
+bool Config::getRouterFlashWrite() const {
+    return _routerFlashWrite;
+}
+
+void Config::setRouterFlashWrite(bool enable) {
+    _routerFlashWrite = enable;
 }
 
 /*

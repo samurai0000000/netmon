@@ -6,6 +6,7 @@
 
 #include "AuthManager.hxx"
 #include "Config.hxx"
+#include "ZyxelDriver.hxx"
 
 #include <iostream>
 #include <fstream>
@@ -383,6 +384,9 @@ bool AuthManager::setPassword(const std::string &newPassword,
         {"salt", bytesToHex(salt.data(), salt.size())},
         {"hash", bytesToHex(hash.data(), hash.size())}
     };
+    if (hasExisting && currentVault.contains("router_password") && currentVault["router_password"].is_string()) {
+        newVault["router_password"] = currentVault["router_password"].get<std::string>();
+    }
     std::string plainJson = newVault.dump();
 
     std::vector<unsigned char> cipherData;
@@ -593,6 +597,185 @@ void AuthManager::setSessionTimestampForTesting(const std::string &token, time_t
         it->second.lastUsedTime = timestamp;
     }
 }
+
+bool AuthManager::setRouterPassword(const std::string &password) {
+    if (password.empty()) {
+        return false;
+    }
+
+    std::string dir;
+    {
+        std::lock_guard<std::mutex> lock(_vaultDirMutex);
+        dir = _vaultDir;
+    }
+    if (!ensureDirectory(dir)) {
+        return false;
+    }
+
+    std::string keyPath = dir + "/vault.key";
+    std::string encPath = dir + "/vault.enc";
+    std::string tmpPath = dir + "/vault.enc.tmp";
+    std::string lockPath = dir + "/vault.lock";
+
+    ScopedLock lock(lockPath, F_WRLCK);
+    if (!lock.isLocked()) {
+        return false;
+    }
+
+    json vaultJson;
+    bool hasExisting = readVaultFile(encPath, keyPath, vaultJson);
+    int gen = 1;
+    if (hasExisting && vaultJson.contains("generation") && vaultJson["generation"].is_number_integer()) {
+        gen = vaultJson["generation"].get<int>();
+    } else {
+        vaultJson["generation"] = gen;
+    }
+
+    vaultJson["router_password"] = password;
+
+    std::vector<unsigned char> key;
+    if (!readKey(keyPath, key)) {
+        key.resize(32);
+        if (RAND_bytes(key.data(), 32) != 1) {
+            return false;
+        }
+        if (!writeKey(keyPath, key)) {
+            return false;
+        }
+    }
+
+    std::string plainJson = vaultJson.dump();
+    std::vector<unsigned char> cipherData;
+    if (!encryptAesGcm(key, plainJson, cipherData)) {
+        return false;
+    }
+
+    int tmpFd = open(tmpPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (tmpFd < 0) {
+        return false;
+    }
+    fchmod(tmpFd, 0600);
+    ssize_t written = write(tmpFd, cipherData.data(), cipherData.size());
+    if (written != static_cast<ssize_t>(cipherData.size())) {
+        close(tmpFd);
+        unlink(tmpPath.c_str());
+        return false;
+    }
+    fsync(tmpFd);
+    close(tmpFd);
+
+    if (rename(tmpPath.c_str(), encPath.c_str()) != 0) {
+        unlink(tmpPath.c_str());
+        return false;
+    }
+
+    int dirFd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dirFd >= 0) {
+        fsync(dirFd);
+        close(dirFd);
+    }
+
+    ZyxelDriver::getInstance().clearAuthFailure();
+    return true;
+}
+
+bool AuthManager::getRouterPassword(std::string &passwordOut) {
+    passwordOut.clear();
+    std::string dir;
+    {
+        std::lock_guard<std::mutex> lock(_vaultDirMutex);
+        dir = _vaultDir;
+    }
+
+    std::string keyPath = dir + "/vault.key";
+    std::string encPath = dir + "/vault.enc";
+    std::string lockPath = dir + "/vault.lock";
+
+    ScopedLock lock(lockPath, F_RDLCK);
+    if (!lock.isLocked()) {
+        return false;
+    }
+
+    json vaultJson;
+    if (!readVaultFile(encPath, keyPath, vaultJson)) {
+        return false;
+    }
+
+    if (vaultJson.contains("router_password") && vaultJson["router_password"].is_string()) {
+        passwordOut = vaultJson["router_password"].get<std::string>();
+        return !passwordOut.empty();
+    }
+
+    return false;
+}
+
+bool AuthManager::clearRouterPassword() {
+    std::string dir;
+    {
+        std::lock_guard<std::mutex> lock(_vaultDirMutex);
+        dir = _vaultDir;
+    }
+
+    std::string keyPath = dir + "/vault.key";
+    std::string encPath = dir + "/vault.enc";
+    std::string tmpPath = dir + "/vault.enc.tmp";
+    std::string lockPath = dir + "/vault.lock";
+
+    ScopedLock lock(lockPath, F_WRLCK);
+    if (!lock.isLocked()) {
+        return false;
+    }
+
+    json vaultJson;
+    if (!readVaultFile(encPath, keyPath, vaultJson)) {
+        return false;
+    }
+
+    if (!vaultJson.contains("router_password")) {
+        return true;
+    }
+
+    vaultJson.erase("router_password");
+
+    std::vector<unsigned char> key;
+    if (!readKey(keyPath, key)) {
+        return false;
+    }
+
+    std::string plainJson = vaultJson.dump();
+    std::vector<unsigned char> cipherData;
+    if (!encryptAesGcm(key, plainJson, cipherData)) {
+        return false;
+    }
+
+    int tmpFd = open(tmpPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (tmpFd < 0) {
+        return false;
+    }
+    fchmod(tmpFd, 0600);
+    ssize_t written = write(tmpFd, cipherData.data(), cipherData.size());
+    if (written != static_cast<ssize_t>(cipherData.size())) {
+        close(tmpFd);
+        unlink(tmpPath.c_str());
+        return false;
+    }
+    fsync(tmpFd);
+    close(tmpFd);
+
+    if (rename(tmpPath.c_str(), encPath.c_str()) != 0) {
+        unlink(tmpPath.c_str());
+        return false;
+    }
+
+    int dirFd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dirFd >= 0) {
+        fsync(dirFd);
+        close(dirFd);
+    }
+
+    return true;
+}
+
 
 /*
  * Local variables:

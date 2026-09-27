@@ -20,6 +20,10 @@ public:
                      const std::string &oldPassword = "",
                      bool requireOld = false);
 
+    bool setRouterPassword(const std::string &password);
+    bool getRouterPassword(std::string &passwordOut);
+    bool clearRouterPassword();
+
     std::string login(const std::string &password);
     bool validateSession(const std::string &token);
     void logout(const std::string &token);

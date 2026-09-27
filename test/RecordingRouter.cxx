@@ -69,7 +69,13 @@ nlohmann::json RecordingRouter::unblockIp(const std::string &ip) {
 
 // Implementations of ZyxelDriver when RecordingRouter replaces src/ZyxelDriver.cxx
 ZyxelDriver::ZyxelDriver()
-    : _configured(true) {
+    : _running(false),
+      _configured(true),
+      _pendingFlashWrite(false),
+      _authFailed(false) {
+}
+
+ZyxelDriver::~ZyxelDriver() {
 }
 
 bool ZyxelDriver::isConfigured() const {
@@ -94,6 +100,9 @@ nlohmann::json ZyxelDriver::unblockIp(const std::string &ip) {
 
 ZyxelDriver &ZyxelDriver::getInstance() {
     return RecordingRouter::getInstance();
+}
+
+void ZyxelDriver::clearAuthFailure() {
 }
 
 /*

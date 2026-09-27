@@ -37,11 +37,13 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
   - Dual-mode asset serving: reads live files from `web/` when present, falling back to compiled C++ string literals for standalone single-binary deployment.
 - **MCP Gateway Integration (`aimon`)**:
   - Dynamically registers network diagnostics, device discovery, firewall automation, and SNMP telemetry tools with `aimon` over a persistent TCP JSON-RPC 2.0 stream.
-- **Least-Privilege Security Model**:
+- **Least-Privilege Security & Credential Model**:
   - Runs as a standard unprivileged user using Linux POSIX capability (`CAP_NET_RAW`).
   - Omits `CAP_NET_ADMIN` to ensure the process cannot alter routing tables, interface IPs, or host firewall rules.
   - Configuration directory is enforced to `0700` (`drwx------`) and files to `0600` (`-rw-------`).
-  - Supports 12-factor environment variable credential injection (`NETMON_ROUTER_PASSWORD`, `NETMON_ROUTER_USER`, `NETMON_SNMP_*`, `NETMON_DB_*`, `NETMON_WEB_*`).
+  - Router credentials reside solely in `AuthManager`'s AES-256-GCM encrypted vault (`~/.config/netmon/vault.enc`), provisioned interactively via `router set-password`. Plaintext config passwords and `NETMON_ROUTER_PASSWORD` environment overrides are not supported.
+  - Zyxel USG firewall integration is **Experimental / Disabled by Default / Live Unqualified** (`router_live_enabled = false`, `router_flash_write = false`). Unit tests cover local in-memory state and PTY parsing only—not live ZySH execution on hardware.
+  - Supports 12-factor environment variable configuration injection (`NETMON_ROUTER_USER`, `NETMON_ROUTER_KEY_PATH`, `NETMON_ROUTER_DRY_RUN`, `NETMON_SNMP_*`, `NETMON_DB_*`, `NETMON_WEB_*`).
 - **Interactive Diagnostic Shell**:
   - Embedded interactive terminal CLI with real-time status, device, and traffic reports.
 
@@ -124,10 +126,10 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
 | **`lan_name_device`** | Write | Assigns friendly names and categories (`known`, `visitor`, `iot`, etc.) persisted to `devices.cfg`. |
 | **`lan_get_top_talkers`** | Read | Top bandwidth consumers over rolling windows (default: 15m, configurable). |
 | **`lan_get_traffic_summary`** | Read | Real-time throughput, packet rates, active capture engine status, and protocol breakdown. |
-| **`firewall_get_status`** | Read | Router hardware model, firmware, link state. |
-| **`firewall_get_sessions`** | Read | Active router state table / connection sessions. |
-| **`firewall_block_ip`** | Write (Gated) | Drops IP address via router firewall (checked against safety invariants). |
-| **`firewall_unblock_ip`** | Write (Gated) | Removes router drop rule for specified IP. |
+| **`firewall_get_status`** | Read (Experimental) | Router hardware model, firmware, link state (when live mode enabled). |
+| **`firewall_get_sessions`** | Read (Experimental) | Active router state table / connection sessions (when live mode enabled). |
+| **`firewall_block_ip`** | Write (Experimental) | Drops IP address via router firewall (when live mode enabled; checked against invariants). |
+| **`firewall_unblock_ip`** | Write (Experimental) | Removes router drop rule for specified IP (when live mode enabled). |
 | **`snmp_get_wan_status`** | Read | Dedicated dual-WAN uplink rates, 5-min averages, 24-hr peaks, and daily GB transfers. |
 | **`snmp_get_device_metrics`** | Read | SNMP system metrics, uptime, and 3-tier filtered active interfaces. |
 | **`snmp_get_interface_counters`** | Read | Line speeds, 64-bit HC octet counters, and packet error counts for specific ports. |
@@ -326,6 +328,8 @@ visitors                     Alias for unregistered
 toptalkers [limit] [mins]    Show top bandwidth consumers (default: 10 hosts, 15 mins)
 traffic                      Show LAN throughput and protocol breakdown
 name <mac> <name> [category] Assign friendly name and category to a device
+router set-password          Interactively set encrypted router password in vault
+router clear-password        Clear encrypted router password from vault
 reload                       Reload configuration and devices registry
 help                         Show available commands
 quit / exit                  Exit the shell
@@ -346,6 +350,10 @@ devices_file = "~/.config/netmon/devices.cfg";
 log_level = "info";
 allow_ai_block_ip = false;
 allow_ai_raw_exec = false;
+
+router_live_enabled = false;
+router_flash_write = false;
+router_dry_run = false;
 
 web = {
     enabled = true;
@@ -374,7 +382,7 @@ All parameters can be injected or overridden via environment variables:
 - `NETMON_WEB_PORT` / `NETMON_WEB_ENABLED` / `NETMON_WEB_BIND`
 - `NETMON_SNMP_TARGET` / `NETMON_SNMP_COMMUNITY` / `NETMON_SNMP_VERSION` / `NETMON_SNMP_PORT`
 - `NETMON_DB_PATH` / `NETMON_DB_RETENTION_DAYS`
-- `NETMON_ROUTER_USER` / `NETMON_ROUTER_PASSWORD` / `NETMON_ROUTER_KEY_PATH`
+- `NETMON_ROUTER_USER` / `NETMON_ROUTER_KEY_PATH` / `NETMON_ROUTER_DRY_RUN`
 
 ---
 
@@ -389,6 +397,7 @@ netmon/
 ├── Version.hxx.in                 # Metadata template (version, host, build timestamp)
 ├── include/
 │   ├── AimonGatewayClient.hxx     # TCP client exporting netmon tools to aimon
+│   ├── AuthManager.hxx            # Encrypted AES-256-GCM vault & session manager
 │   ├── Config.hxx                 # libconfig++ configuration manager
 │   ├── DeviceRegistry.hxx         # Device registry and persistence engine
 │   ├── HostMetrics.hxx            # Host behavioral state & IPFIX/RMON metrics
@@ -399,11 +408,14 @@ netmon/
 │   ├── SecurityCheckpoint.hxx     # AI safety invariants and permission gating
 │   ├── SnmpAggregator.hxx         # SNMP metrics engine (64-bit HC counters, 30s poll)
 │   ├── SnmpDatabase.hxx           # SQLite WAL time-series storage & hourly rollups
+│   ├── SyslogServer.hxx           # Syslog UDP receiver and audit ingest
 │   ├── WebAssets.hxx              # Embedded fallback HTML/CSS/JS string literals
 │   ├── WebServer.hxx              # Asynchronous HTTP server (cpp-httplib)
-│   └── ZyxelDriver.hxx            # Concrete Zyxel USG router driver
+│   ├── ZyxelDriver.hxx            # Concrete Zyxel USG router driver
+│   └── ZyxelSshClient.hxx         # libssh2 PTY client & ZySH stream parser
 ├── src/
 │   ├── AimonGatewayClient.cxx     # AimonGatewayClient implementation
+│   ├── AuthManager.cxx            # Vault encryption and auth token manager
 │   ├── Config.cxx                 # Config manager implementation
 │   ├── DeviceRegistry.cxx         # Device registry implementation
 │   ├── LanSniffer.cxx             # LanSniffer & packet stream decoding
@@ -413,8 +425,10 @@ netmon/
 │   ├── SecurityCheckpoint.cxx     # Security checkpoint implementation
 │   ├── SnmpAggregator.cxx         # SNMP aggregator implementation
 │   ├── SnmpDatabase.cxx           # SQLite time-series database implementation
+│   ├── SyslogServer.cxx           # Syslog receiver implementation
 │   ├── WebServer.cxx              # Embedded WebServer & REST API implementation
-│   └── ZyxelDriver.cxx            # Zyxel router driver implementation
+│   ├── ZyxelDriver.cxx            # Zyxel router driver implementation
+│   └── ZyxelSshClient.cxx         # Zyxel SSH client & PTY driver implementation
 ├── web/                           # Embedded web dashboard frontend assets
 │   ├── app.js                     # Live Canvas chart rendering & API polling
 │   ├── index.html                 # Dark-mode dashboard layout
