@@ -1,0 +1,32 @@
+=== Envelope 2 Qualification Gate Evidence ===
+Date: 2026-09-30T21:18:50+08:00
+Target: Full Regression & Live Dual-Instance Prevention Verification
+
+1. CppUTest Regression Results:
+test_netmon_suite: OK (57 tests, 57 ran, 418 checks, 0 ignored, 0 filtered out, 7919 ms)
+test_zyxel_driver_suite: OK (39 tests, 39 ran, 217 checks, 0 ignored, 0 filtered out, 196 ms)
+Overall Test Result: PASS (100% assertions, 0 memory leaks, exit code 0)
+
+2. Live Single-Instance Lock Collision Test:
+- Launched background netmon test daemon with isolated configuration.
+- Verified lock file generated: ~/.config/netmon/netmon.builder.pid containing:
+  1010524
+  builder
+- Attempted to launch 2nd instance on same host:
+  Result: Immediate exit code 1 with error message:
+  [netmon] Error: Another instance of netmon is already running on host 'builder' (PID 1010524)
+  [netmon] Lock file: ~/.config/netmon/netmon.builder.pid
+
+3. CLI Non-Contention Verification:
+- Ran `./build/netmon status -c test.cfg`: exited code 0 cleanly without lock contention.
+- Ran `./build/netmon --help` and `./build/netmon --version`: exited code 0 cleanly.
+
+4. Stale PID Reclaim & Graceful Release Verification:
+- Simulated ungraceful crash leaving stale lock file.
+- Launched `./build/netmon run`: detected dead PID, reclaimed lock safely, initialized subsystems cleanly.
+- Sent SIGTERM: caught signal, joined worker threads, unlinked lock file cleanly.
+- Confirmed lock file removed: `ls ~/.config/netmon/netmon.builder.pid` -> No such file or directory.
+
+5. Pre-Commit Compliance Gate:
+- Ran `python3 ../intelligence/scripts/check_compliance.py --policy selfso --staged`
+- Result: ✅ All compliance checks passed cleanly!

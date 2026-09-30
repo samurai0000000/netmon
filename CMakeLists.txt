@@ -79,6 +79,7 @@ set(SOURCES
     src/NetMonShell.cxx
     src/AuthManager.cxx
     src/SyslogServer.cxx
+    src/InstanceLock.cxx
 )
 
 add_executable(netmon ${SOURCES})
@@ -134,6 +135,7 @@ set(TEST_SOURCES
     test/TestApprovalQueue.cxx
     test/TestAuditTrail.cxx
     test/TestSyslogIngest.cxx
+    test/TestInstanceLock.cxx
     src/AuthManager.cxx
     src/WebServer.cxx
     src/Config.cxx
@@ -150,6 +152,7 @@ set(TEST_SOURCES
     src/NetMonShell.cxx
     src/SyslogServer.cxx
     src/ZyxelSshClient.cxx
+    src/InstanceLock.cxx
 )
 
 add_executable(test_netmon_suite ${TEST_SOURCES})

@@ -9,3 +9,4 @@ build/
 plan/*
 !plan/done/
 test_data/
+.claude

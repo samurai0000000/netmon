@@ -23,6 +23,7 @@
 #include "NetMonShell.hxx"
 #include "AuthManager.hxx"
 #include "SyslogServer.hxx"
+#include "InstanceLock.hxx"
 #include <libssh2.h>
 
 static volatile sig_atomic_t g_shutdownRequested = 0;
@@ -51,6 +52,7 @@ static void printUsage(const char *progName) {
               << "  run            Start NetMon daemon in non-interactive background mode\n"
               << "  status         Print current device registry and interface status\n"
               << "  set-password   Set or replace admin password (requires controlling terminal)\n"
+              << "  router-set-password Set or replace Zyxel router password in encrypted vault\n"
               << "  version        Show NetMon version and build metadata\n"
               << "  help           Show this help message\n\n"
               << "Options:\n"
@@ -95,6 +97,11 @@ int main(int argc, char **argv) {
             mode = "status";
         } else if (arg == "set-password") {
             mode = "set-password";
+        } else if (arg == "router-set-password") {
+            mode = "router-set-password";
+        } else if (arg == "router" && i + 1 < argc && std::string(argv[i + 1]) == "set-password") {
+            mode = "router-set-password";
+            ++i;
         } else if (arg == "run") {
             mode = "run";
         } else if (arg == "daemon") {
@@ -163,6 +170,34 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    if (mode == "router-set-password") {
+        if (!isatty(STDIN_FILENO)) {
+            std::cerr << "Error: router-set-password requires a controlling terminal" << std::endl;
+            return 1;
+        }
+
+        char *p1 = getpass("Enter new Zyxel router password: ");
+        if (!p1 || std::strlen(p1) == 0) {
+            std::cerr << "Error: Router password cannot be empty" << std::endl;
+            return 1;
+        }
+        std::string pass1 = p1;
+
+        char *p2 = getpass("Confirm new Zyxel router password: ");
+        if (!p2 || pass1 != p2) {
+            std::cerr << "Error: Passwords do not match" << std::endl;
+            return 1;
+        }
+
+        if (!AuthManager::getInstance().setRouterPassword(pass1)) {
+            std::cerr << "Error: Failed to store router password in vault" << std::endl;
+            return 1;
+        }
+
+        std::cout << "Router password successfully stored in encrypted vault." << std::endl;
+        return 0;
+    }
+
     // Load persistent devices registry
     DeviceRegistry::getInstance().load();
 
@@ -194,6 +229,16 @@ int main(int argc, char **argv) {
         MacVendorResolver::getInstance().waitUntilDone(500);
         NetMonShell::getInstance().executeCommand("devices");
         return 0;
+    }
+
+    // Enforce single instance per host
+    InstanceLock instanceLock;
+    if (!instanceLock.acquire()) {
+        std::cerr << "[netmon] Error: Another instance of netmon is already running on host '"
+                  << instanceLock.getHostname() << "' (PID "
+                  << static_cast<int>(instanceLock.getExistingPid()) << ")\n"
+                  << "[netmon] Lock file: " << instanceLock.getLockFilePath() << std::endl;
+        return 1;
     }
 
     // Initialize SQLite time-series telemetry database
@@ -251,6 +296,8 @@ int main(int argc, char **argv) {
     SnmpAggregator::getInstance().join();
     AimonGatewayClient::getInstance().join();
     SnmpDatabase::getInstance().close();
+
+    instanceLock.release();
 
     libssh2_exit();
 
