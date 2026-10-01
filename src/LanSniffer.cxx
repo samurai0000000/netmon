@@ -108,7 +108,7 @@ bool LanSniffer::checkPcapPermissions(std::string &reason, std::string &remediat
         if (reason.find("permission") != std::string::npos ||
             reason.find("Operation not permitted") != std::string::npos ||
             reason.find("socket") != std::string::npos) {
-            remediation = "Run 'make setcap' or 'sudo setcap cap_net_raw=eip <binary>' to enable packet capture.";
+            remediation = "Run 'make setcap_netmon' (one-time setup) or 'make setcap' to enable packet capture.";
         } else {
             remediation = "Verify interface '" + iface + "' exists and is UP (e.g. 'ip link show " + iface + "').";
         }
@@ -150,7 +150,7 @@ bool LanSniffer::start() {
     _pcapHandle = pcap_open_live(_interface.c_str(), 96, 1, 100, errbuf);
     if (!_pcapHandle) {
         std::string errStr(errbuf);
-        std::string hint = "Run 'make setcap' or 'sudo setcap cap_net_raw=eip <binary>' to enable packet capture.";
+        std::string hint = "Run 'make setcap_netmon' (one-time setup) or 'make setcap' to enable packet capture.";
 
         {
             std::lock_guard<std::mutex> lock(_mutex);

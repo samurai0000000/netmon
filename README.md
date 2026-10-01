@@ -210,12 +210,17 @@ On Linux, opening raw packet capture sockets (`socket(PF_PACKET, SOCK_RAW)`) and
 
 To enforce the **Principle of Least Privilege**, `netmon` requires **only `CAP_NET_RAW`** and explicitly avoids `CAP_NET_ADMIN`. This guarantees that the binary has permission strictly to sniff packet headers—it is physically incapable of altering kernel routing tables, modifying interface IP configurations, or changing firewall rules.
 
-Attach the capability directly to the binary:
+Attach the capability directly to the binary using the persistent setuid helper:
 
 ```bash
+# Build the helper once and grant setuid root:
+make setcap_netmon
+sudo chown root:root build/setcap_netmon && sudo chmod 4755 build/setcap_netmon
+
+# Now 'make' will automatically and silently apply cap_net_raw on every build without sudo.
+# Or apply manually at any time:
 make setcap
-# Or run manually:
-sudo setcap cap_net_raw=eip build/netmon
+# (Runs build/setcap_netmon if active, or falls back to sudo setcap cap_net_raw=eip build/netmon)
 ```
 
 Verify that the capability was attached:
