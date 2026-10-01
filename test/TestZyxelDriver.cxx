@@ -507,18 +507,17 @@ TEST(ZyxelDriverTest, RouterDryRunLogsExactZyShBlockSequence) {
     STRCMP_EQUAL("pending", mutations[0].state.c_str());
 
     auto log = ZyxelDriver::getInstance().getDryRunLog();
-    LONGS_EQUAL(11, log.size());
+    LONGS_EQUAL(10, log.size());
     STRCMP_EQUAL("configure terminal", log[0].c_str());
-    STRCMP_EQUAL("address-object NETMON_BLK_192_0_2_55 host 192.0.2.55", log[1].c_str());
+    STRCMP_EQUAL("address-object NETMON_BLK_192_0_2_55 192.0.2.55", log[1].c_str());
     STRCMP_EQUAL("exit", log[2].c_str());
-    STRCMP_EQUAL("policy-control rule-insert 1", log[3].c_str());
-    STRCMP_EQUAL("name NETMON_RULE_192_0_2_55", log[4].c_str());
+    STRCMP_EQUAL("secure-policy insert 1", log[3].c_str());
+    STRCMP_EQUAL("description NETMON_RULE_192_0_2_55", log[4].c_str());
     STRCMP_EQUAL("action deny", log[5].c_str());
-    STRCMP_EQUAL("source-ip NETMON_BLK_192_0_2_55", log[6].c_str());
-    STRCMP_EQUAL("description \"NetMon Auto-Block: Bandwidth Flood\"", log[7].c_str());
-    STRCMP_EQUAL("activate", log[8].c_str());
+    STRCMP_EQUAL("sourceip NETMON_BLK_192_0_2_55", log[6].c_str());
+    STRCMP_EQUAL("activate", log[7].c_str());
+    STRCMP_EQUAL("exit", log[8].c_str());
     STRCMP_EQUAL("exit", log[9].c_str());
-    STRCMP_EQUAL("exit", log[10].c_str());
 }
 
 TEST(ZyxelDriverTest, RouterDryRunLogsExactZyShUnblockSequence) {
@@ -538,7 +537,7 @@ TEST(ZyxelDriverTest, RouterDryRunLogsExactZyShUnblockSequence) {
     auto log = ZyxelDriver::getInstance().getDryRunLog();
     LONGS_EQUAL(4, log.size());
     STRCMP_EQUAL("configure terminal", log[0].c_str());
-    STRCMP_EQUAL("no policy-control NETMON_RULE_192_0_2_66", log[1].c_str());
+    STRCMP_EQUAL("no secure-policy NETMON_RULE_192_0_2_66", log[1].c_str());
     STRCMP_EQUAL("no address-object NETMON_BLK_192_0_2_66", log[2].c_str());
     STRCMP_EQUAL("exit", log[3].c_str());
 }
@@ -567,20 +566,19 @@ TEST(ZyxelDriverTest, RouterDryRunLogsFreshSessionReplayDeleteThenInsert) {
     STRCMP_EQUAL("pending", loaded[0].state.c_str());
 
     auto log = ZyxelDriver::getInstance().getDryRunLog();
-    LONGS_EQUAL(13, log.size());
+    LONGS_EQUAL(12, log.size());
     STRCMP_EQUAL("configure terminal", log[0].c_str());
-    STRCMP_EQUAL("no policy-control NETMON_RULE_192_0_2_77", log[1].c_str());
+    STRCMP_EQUAL("no secure-policy NETMON_RULE_192_0_2_77", log[1].c_str());
     STRCMP_EQUAL("no address-object NETMON_BLK_192_0_2_77", log[2].c_str());
-    STRCMP_EQUAL("address-object NETMON_BLK_192_0_2_77 host 192.0.2.77", log[3].c_str());
+    STRCMP_EQUAL("address-object NETMON_BLK_192_0_2_77 192.0.2.77", log[3].c_str());
     STRCMP_EQUAL("exit", log[4].c_str());
-    STRCMP_EQUAL("policy-control rule-insert 1", log[5].c_str());
-    STRCMP_EQUAL("name NETMON_RULE_192_0_2_77", log[6].c_str());
+    STRCMP_EQUAL("secure-policy insert 1", log[5].c_str());
+    STRCMP_EQUAL("description NETMON_RULE_192_0_2_77", log[6].c_str());
     STRCMP_EQUAL("action deny", log[7].c_str());
-    STRCMP_EQUAL("source-ip NETMON_BLK_192_0_2_77", log[8].c_str());
-    STRCMP_EQUAL("description \"NetMon Auto-Block: Replay Dry Run Test\"", log[9].c_str());
-    STRCMP_EQUAL("activate", log[10].c_str());
+    STRCMP_EQUAL("sourceip NETMON_BLK_192_0_2_77", log[8].c_str());
+    STRCMP_EQUAL("activate", log[9].c_str());
+    STRCMP_EQUAL("exit", log[10].c_str());
     STRCMP_EQUAL("exit", log[11].c_str());
-    STRCMP_EQUAL("exit", log[12].c_str());
 }
 
 TEST(ZyxelDriverTest, RouterFlashWriteDisabledByDefaultDoesNotSendWriteOrPrune) {
@@ -641,6 +639,48 @@ TEST(ZyxelDriverTest, EnvironmentVariablesCannotEnableLiveOrFlashWrite) {
 
     unsetenv("NETMON_ROUTER_LIVE_ENABLED");
     unsetenv("NETMON_ROUTER_FLASH_WRITE");
+}
+
+TEST(ZyxelDriverTest, PingAndTracerouteRejectInvalidHost) {
+    auto res1 = ZyxelDriver::getInstance().ping("1.1.1.1; rm -rf /", 4);
+    STRCMP_EQUAL("error", res1["status"].get<std::string>().c_str());
+
+    auto res2 = ZyxelDriver::getInstance().traceroute("`whoami`.com");
+    STRCMP_EQUAL("error", res2["status"].get<std::string>().c_str());
+
+    auto res3 = ZyxelDriver::getInstance().ping("", 4);
+    STRCMP_EQUAL("error", res3["status"].get<std::string>().c_str());
+}
+
+TEST(ZyxelDriverTest, PingAndTracerouteDryRunLogsCommands) {
+    ZyxelDriver::getInstance().setDryRun(true);
+    ZyxelDriver::getInstance().clearDryRunLog();
+
+    auto resPing = ZyxelDriver::getInstance().ping("1.1.1.1", 3);
+    STRCMP_EQUAL("ok", resPing["status"].get<std::string>().c_str());
+    STRCMP_EQUAL("ping", resPing["type"].get<std::string>().c_str());
+    LONGS_EQUAL(3, resPing["packets_transmitted"].get<int>());
+
+    auto resTrace = ZyxelDriver::getInstance().traceroute("8.8.8.8");
+    STRCMP_EQUAL("ok", resTrace["status"].get<std::string>().c_str());
+    STRCMP_EQUAL("traceroute", resTrace["type"].get<std::string>().c_str());
+
+    auto dryLog = ZyxelDriver::getInstance().getDryRunLog();
+    LONGS_EQUAL(2, dryLog.size());
+    STRCMP_EQUAL("ping 1.1.1.1 count 3", dryLog[0].c_str());
+    STRCMP_EQUAL("traceroute 8.8.8.8", dryLog[1].c_str());
+}
+
+TEST(ZyxelDriverTest, PingAndTracerouteWhenDisabledReturnsDisabled) {
+    ZyxelDriver::getInstance().configure("127.0.0.1", 22, "admin", "");
+    ZyxelDriver::getInstance().setDryRun(false);
+    ZyxelDriver::getInstance().setLiveEnabled(false);
+
+    auto res1 = ZyxelDriver::getInstance().ping("1.1.1.1", 2);
+    STRCMP_EQUAL("disabled", res1["status"].get<std::string>().c_str());
+
+    auto res2 = ZyxelDriver::getInstance().traceroute("1.1.1.1");
+    STRCMP_EQUAL("disabled", res2["status"].get<std::string>().c_str());
 }
 
 /*

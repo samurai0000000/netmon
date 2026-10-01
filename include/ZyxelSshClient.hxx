@@ -12,6 +12,7 @@
 #include <mutex>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 
 #include <libssh2.h>
 
@@ -36,7 +37,8 @@ enum class SshResult {
     ERR_TIMEOUT,
     ERR_LOCKED,
     ERR_EXEC_FAILED,
-    ERR_SYNTAX
+    ERR_SYNTAX,
+    ERR_INTERRUPTED
 };
 
 class ZyxelSshClient {
@@ -65,10 +67,23 @@ public:
     bool sendKeepalive();
     void resetForTesting();
 
+    void cancelActiveCommand();
+    bool isCancelled() const;
+
+    using ChannelReader = std::function<ssize_t(char *buf, size_t buflen, bool &eofOut)>;
+    using ChannelWriter = std::function<void(const char *cmd, size_t len)>;
+
+    SshResult drainUntilPromptForTesting(
+        const ChannelReader &reader,
+        const ChannelWriter &writer,
+        std::string &outputOut,
+        int timeoutMs = 5000);
+
     // Pure parsing, transformation & sanitization utilities (testable without network)
     static std::string stripAnsiEscapes(const std::string &input);
     static bool matchPrompt(const std::string &buffer, std::string &matchedPrompt);
     static std::string stripCommandEcho(const std::string &buffer, const std::string &commandSent);
+    static std::string stripTrailingPrompt(const std::string &buffer);
     static bool isConfigLocked(const std::string &buffer);
     static bool isSyntaxError(const std::string &buffer);
     static std::string sanitizeReason(const std::string &rawReason);
@@ -77,6 +92,11 @@ public:
 private:
     SshResult verifyHostKey(LIBSSH2_SESSION *session);
     SshResult drainUntilPrompt(std::string &outputOut, int timeoutMs = 5000);
+    SshResult drainUntilPromptWithReader(
+        const ChannelReader &reader,
+        const ChannelWriter &writer,
+        std::string &outputOut,
+        int timeoutMs = 5000);
     SshResult executeCommandUnlocked(const std::string &command,
                                     std::string &outputOut,
                                     int timeoutMs = 5000);
@@ -95,6 +115,7 @@ private:
 
     std::atomic<SshClientState> _state;
     std::string        _lastMatchedPrompt;
+    std::atomic<bool>  _cancelled;
 };
 
 #endif /* NETMON_ZYXELSSHCLIENT_HXX */

@@ -7,6 +7,13 @@
 #include "ZyxelDriver.hxx"
 #include "Config.hxx"
 #include "AuthManager.hxx"
+#include "zyxel/ZyxelTypes.hxx"
+#include "zyxel/ZyxelScanner.hxx"
+#include "zyxel/ZyxelSystemCmd.hxx"
+#include "zyxel/ZyxelNetworkCmd.hxx"
+#include "zyxel/ZyxelObjectCmd.hxx"
+#include "zyxel/ZyxelFirewallCmd.hxx"
+#include "zyxel/ZyxelNatCmd.hxx"
 
 #include <iostream>
 #include <fstream>
@@ -381,6 +388,19 @@ static bool isValidIpv4(const std::string &ip) {
     return (octets == 4);
 }
 
+static bool isValidTargetHost(const std::string &target) {
+    if (target.empty() || target.size() > 128) return false;
+    for (char c : target) {
+        if (!((c >= 'a' && c <= 'z') ||
+              (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') ||
+              c == '.' || c == '-')) {
+            return false;
+        }
+    }
+    return true;
+}
+
 SshResult ZyxelDriver::executeBlockSequence(const std::string &ip,
                                            const std::string &sanitizedName,
                                            const std::string &reason) {
@@ -399,7 +419,7 @@ SshResult ZyxelDriver::executeBlockSequence(const std::string &ip,
     }
 
     // Step 1: Create or update address-object (treat duplicate as success)
-    std::string cmdObj = "address-object " + objName + " host " + ip;
+    std::string cmdObj = ZyxelObjectCmd::cmdAddAddressHost(objName, ip);
     res = _sshClient.executeCommand(cmdObj, out);
     if (res != SshResult::SUCCESS &&
         out.find("already exists") == std::string::npos &&
@@ -412,8 +432,8 @@ SshResult ZyxelDriver::executeBlockSequence(const std::string &ip,
     }
     _sshClient.executeCommand("exit", out);
 
-    // Step 2: Insert policy-control rule at position 1
-    res = _sshClient.executeCommand("policy-control rule-insert 1", out);
+    // Step 2: Insert secure-policy rule at position 1
+    res = _sshClient.executeCommand("secure-policy insert 1", out);
     if (res != SshResult::SUCCESS) {
         if (out.find("already exists") != std::string::npos ||
             out.find("duplicated") != std::string::npos) {
@@ -427,7 +447,7 @@ SshResult ZyxelDriver::executeBlockSequence(const std::string &ip,
         return res;
     }
 
-    res = _sshClient.executeCommand("name " + ruleName, out);
+    res = _sshClient.executeCommand("description " + ruleName, out);
     if (res != SshResult::SUCCESS ||
         out.find("already exists") != std::string::npos ||
         out.find("duplicated") != std::string::npos) {
@@ -449,19 +469,11 @@ SshResult ZyxelDriver::executeBlockSequence(const std::string &ip,
         if (ZyxelSshClient::isSyntaxError(out)) return SshResult::ERR_SYNTAX;
         return res;
     }
-    res = _sshClient.executeCommand("source-ip " + objName, out);
+    res = _sshClient.executeCommand("sourceip " + objName, out);
     if (res != SshResult::SUCCESS) {
         executeRollback(sanitizedName);
         if (ZyxelSshClient::isSyntaxError(out)) return SshResult::ERR_SYNTAX;
         return res;
-    }
-    if (!cleanReason.empty()) {
-        res = _sshClient.executeCommand("description \"NetMon Auto-Block: " + cleanReason + "\"", out);
-        if (res != SshResult::SUCCESS) {
-            executeRollback(sanitizedName);
-            if (ZyxelSshClient::isSyntaxError(out)) return SshResult::ERR_SYNTAX;
-            return res;
-        }
     }
     res = _sshClient.executeCommand("activate", out);
     if (res != SshResult::SUCCESS) {
@@ -491,7 +503,7 @@ SshResult ZyxelDriver::executeUnblockSequence(const std::string &sanitizedName) 
     }
 
     // Rule deleted FIRST, releasing reference to address-object
-    res = _sshClient.executeCommand("no policy-control " + ruleName, out);
+    res = _sshClient.executeCommand(ZyxelFirewallCmd::cmdDeleteRule(ruleName), out);
     if (res != SshResult::SUCCESS) {
         if (ZyxelSshClient::isSyntaxError(out)) {
             _sshClient.unwindToRootPrompt();
@@ -505,7 +517,7 @@ SshResult ZyxelDriver::executeUnblockSequence(const std::string &sanitizedName) 
         }
     }
 
-    res = _sshClient.executeCommand("no address-object " + objName, out);
+    res = _sshClient.executeCommand(ZyxelObjectCmd::cmdDeleteAddress(objName), out);
     if (res != SshResult::SUCCESS) {
         if (ZyxelSshClient::isSyntaxError(out)) {
             _sshClient.unwindToRootPrompt();
@@ -529,14 +541,18 @@ void ZyxelDriver::executeRollback(const std::string &sanitizedName) {
     std::string objName = "NETMON_BLK_" + sanitizedName;
     std::string ruleName = "NETMON_RULE_" + sanitizedName;
     std::string out;
-    _sshClient.executeCommand("no policy-control " + ruleName, out);
-    _sshClient.executeCommand("no address-object " + objName, out);
+    _sshClient.executeCommand(ZyxelFirewallCmd::cmdDeleteRule(ruleName), out);
+    _sshClient.executeCommand(ZyxelObjectCmd::cmdDeleteAddress(objName), out);
     _sshClient.unwindToRootPrompt();
 }
 
 void ZyxelDriver::clearAuthFailure() {
     std::lock_guard<std::mutex> lock(_driverMutex);
     _authFailed = false;
+}
+
+void ZyxelDriver::cancelActiveCommand() {
+    _sshClient.cancelActiveCommand();
 }
 
 nlohmann::json ZyxelDriver::blockIp(const std::string &ip, const std::string &reason) {
@@ -574,18 +590,14 @@ nlohmann::json ZyxelDriver::blockIp(const std::string &ip, const std::string &re
     if (isDryRun()) {
         std::string objName = "NETMON_BLK_" + sanitizedName;
         std::string ruleName = "NETMON_RULE_" + sanitizedName;
-        std::string cleanReason = ZyxelSshClient::sanitizeReason(reason);
 
         logDryRunCommand("configure terminal");
-        logDryRunCommand("address-object " + objName + " host " + ip);
+        logDryRunCommand("address-object " + objName + " " + ip);
         logDryRunCommand("exit");
-        logDryRunCommand("policy-control rule-insert 1");
-        logDryRunCommand("name " + ruleName);
+        logDryRunCommand("secure-policy insert 1");
+        logDryRunCommand("description " + ruleName);
         logDryRunCommand("action deny");
-        logDryRunCommand("source-ip " + objName);
-        if (!cleanReason.empty()) {
-            logDryRunCommand("description \"NetMon Auto-Block: " + cleanReason + "\"");
-        }
+        logDryRunCommand("sourceip " + objName);
         logDryRunCommand("activate");
         logDryRunCommand("exit");
         logDryRunCommand("exit");
@@ -724,7 +736,7 @@ nlohmann::json ZyxelDriver::unblockIp(const std::string &ip) {
         std::string ruleName = "NETMON_RULE_" + sanitizedName;
 
         logDryRunCommand("configure terminal");
-        logDryRunCommand("no policy-control " + ruleName);
+        logDryRunCommand("no secure-policy " + ruleName);
         logDryRunCommand("no address-object " + objName);
         logDryRunCommand("exit");
 
@@ -848,18 +860,26 @@ nlohmann::json ZyxelDriver::getStatus() {
         res["transport"] = "SSH-2.0 (libssh2)";
 
         std::string out;
-        SshResult rc = _sshClient.executeCommand("show version", out, 5000);
+        SshResult rc = _sshClient.executeCommand(ZyxelSystemCmd::cmdShowVersion(), out, 5000);
         if (rc == SshResult::SUCCESS) {
             res["raw_version"] = out;
-            std::istringstream iss(out);
-            std::string line;
-            while (std::getline(iss, line)) {
-                if (line.find("model") != std::string::npos || line.find("Model") != std::string::npos) {
-                    res["model"] = line;
-                } else if (line.find("firmware") != std::string::npos || line.find("Firmware") != std::string::npos || line.find("ZyNOS") != std::string::npos) {
-                    res["firmware"] = line;
-                } else if (line.find("uptime") != std::string::npos || line.find("Uptime") != std::string::npos) {
-                    res["uptime"] = line;
+            ZyxelVersionInfo verInfo;
+            if (ZyxelSystemCmd::parseVersion(out, verInfo)) {
+                res["model"] = verInfo.model;
+                res["firmware"] = verInfo.firmwareVersion;
+                res["build_date"] = verInfo.buildDate;
+                res["serial_number"] = verInfo.serialNumber;
+            } else {
+                std::istringstream iss(out);
+                std::string line;
+                while (std::getline(iss, line)) {
+                    if (line.find("model") != std::string::npos || line.find("Model") != std::string::npos) {
+                        res["model"] = line;
+                    } else if (line.find("firmware") != std::string::npos || line.find("Firmware") != std::string::npos || line.find("ZyNOS") != std::string::npos) {
+                        res["firmware"] = line;
+                    } else if (line.find("uptime") != std::string::npos || line.find("Uptime") != std::string::npos) {
+                        res["uptime"] = line;
+                    }
                 }
             }
         }
@@ -904,7 +924,7 @@ nlohmann::json ZyxelDriver::getSessions() {
     }
 
     std::string out;
-    SshResult rc = _sshClient.executeCommand("show session summary", out, 5000);
+    SshResult rc = _sshClient.executeCommand(ZyxelSystemCmd::cmdShowConnStatus(), out, 5000);
     if (rc != SshResult::SUCCESS) {
         res["status"] = "error";
         res["error"] = "Failed to query session summary";
@@ -915,6 +935,175 @@ nlohmann::json ZyxelDriver::getSessions() {
     res["status"] = "ok";
     res["raw_summary"] = out;
     res["sessions"] = json::array();
+    ZyxelSessionSummary sum;
+    if (ZyxelSystemCmd::parseConnStatus(out, sum)) {
+        res["active_sessions"] = sum.activeSessions;
+        res["max_sessions"] = sum.maxSessions;
+        res["session_usage_percent"] = sum.sessionUsagePercent;
+    }
+    return res;
+}
+
+nlohmann::json ZyxelDriver::ping(const std::string &target, int count) {
+    nlohmann::json res;
+    if (!isValidTargetHost(target)) {
+        res["status"] = "error";
+        res["error"] = "Invalid target host or IP format";
+        res["target"] = target;
+        return res;
+    }
+
+    if (count < 1) count = 1;
+    if (count > 10) count = 10;
+
+    std::lock_guard<std::mutex> lock(_driverMutex);
+
+    if (isDryRun()) {
+        std::string cmd = ZyxelSystemCmd::cmdPing(target, count);
+        logDryRunCommand(cmd);
+        res["status"] = "ok";
+        res["type"] = "ping";
+        res["target"] = target;
+        res["packets_transmitted"] = count;
+        res["packets_received"] = count;
+        res["packet_loss_percent"] = 0.0;
+        res["min_latency_ms"] = 1.0;
+        res["avg_latency_ms"] = 2.0;
+        res["max_latency_ms"] = 3.0;
+        res["dry_run"] = true;
+        return res;
+    }
+
+    if (!_configured) {
+        res["status"] = "unconfigured";
+        res["error"] = "Router driver unconfigured";
+        return res;
+    }
+
+    if (!isLiveEnabled()) {
+        res["status"] = "disabled";
+        res["error"] = "Router live mode disabled (router_live_enabled = false)";
+        return res;
+    }
+
+    ensureConnectedUnlocked();
+
+    if (!_sshClient.isConnected()) {
+        res["status"] = "offline";
+        res["error"] = "SSH connection to router is offline";
+        return res;
+    }
+
+    std::string cmd = ZyxelSystemCmd::cmdPing(target, count);
+    std::string out;
+    int timeoutMs = 10000 + (count * 2000);
+    SshResult rc = _sshClient.executeCommand(cmd, out, timeoutMs);
+    if (rc == SshResult::ERR_INTERRUPTED) {
+        res["status"] = "canceled";
+        res["error"] = "Ping probe canceled by operator (Ctrl+C)";
+        return res;
+    } else if (rc == SshResult::ERR_TIMEOUT) {
+        res["status"] = "error";
+        res["error"] = "Ping probe timed out on router";
+        res["raw_output"] = ZyxelSshClient::stripTrailingPrompt(out);
+        return res;
+    } else if (rc != SshResult::SUCCESS) {
+        res["status"] = "error";
+        res["error"] = "Ping command failed on router";
+        res["raw_output"] = ZyxelSshClient::stripTrailingPrompt(out);
+        return res;
+    }
+
+    ZyxelDiagnosticResult diag;
+    if (ZyxelSystemCmd::parsePing(out, diag)) {
+        res = diag.toJson();
+        res["status"] = "ok";
+        res["target"] = target;
+        res["raw_output"] = ZyxelSshClient::stripTrailingPrompt(out);
+    } else {
+        res["status"] = "ok";
+        res["target"] = target;
+        res["raw_output"] = ZyxelSshClient::stripTrailingPrompt(out);
+    }
+    return res;
+}
+
+nlohmann::json ZyxelDriver::traceroute(const std::string &target) {
+    nlohmann::json res;
+    if (!isValidTargetHost(target)) {
+        res["status"] = "error";
+        res["error"] = "Invalid target host or IP format";
+        res["target"] = target;
+        return res;
+    }
+
+    std::lock_guard<std::mutex> lock(_driverMutex);
+
+    if (isDryRun()) {
+        std::string cmd = ZyxelSystemCmd::cmdTraceroute(target);
+        logDryRunCommand(cmd);
+        res["status"] = "ok";
+        res["type"] = "traceroute";
+        res["target"] = target;
+        res["packets_received"] = 3;
+        res["min_latency_ms"] = 0.5;
+        res["avg_latency_ms"] = 2.0;
+        res["max_latency_ms"] = 12.0;
+        res["dry_run"] = true;
+        return res;
+    }
+
+    if (!_configured) {
+        res["status"] = "unconfigured";
+        res["error"] = "Router driver unconfigured";
+        return res;
+    }
+
+    if (!isLiveEnabled()) {
+        res["status"] = "disabled";
+        res["error"] = "Router live mode disabled (router_live_enabled = false)";
+        return res;
+    }
+
+    ensureConnectedUnlocked();
+
+    if (!_sshClient.isConnected()) {
+        res["status"] = "offline";
+        res["error"] = "SSH connection to router is offline";
+        return res;
+    }
+
+    std::string cmd = ZyxelSystemCmd::cmdTraceroute(target);
+    std::string out;
+    SshResult rc = _sshClient.executeCommand(cmd, out, 60000);
+    if (rc == SshResult::ERR_INTERRUPTED) {
+        res["status"] = "canceled";
+        res["error"] = "Traceroute canceled by operator (Ctrl+C)";
+        res["raw_output"] = ZyxelSshClient::stripTrailingPrompt(out);
+        return res;
+    } else if (rc == SshResult::ERR_TIMEOUT) {
+        res["status"] = "error";
+        res["error"] = "Traceroute command timed out on router (exceeded 60s)";
+        res["raw_output"] = ZyxelSshClient::stripTrailingPrompt(out);
+        return res;
+    } else if (rc != SshResult::SUCCESS) {
+        res["status"] = "error";
+        res["error"] = "Traceroute command failed on router";
+        res["raw_output"] = ZyxelSshClient::stripTrailingPrompt(out);
+        return res;
+    }
+
+    ZyxelDiagnosticResult diag;
+    if (ZyxelSystemCmd::parseTraceroute(out, diag)) {
+        res = diag.toJson();
+        res["status"] = "ok";
+        res["target"] = target;
+        res["raw_output"] = diag.rawOutput;
+    } else {
+        res["status"] = "ok";
+        res["target"] = target;
+        res["raw_output"] = ZyxelSshClient::stripTrailingPrompt(out);
+    }
     return res;
 }
 
@@ -937,24 +1126,21 @@ bool ZyxelDriver::replayJournalUnlocked() {
 
             if (m.op == "block") {
                 logDryRunCommand("configure terminal");
-                logDryRunCommand("no policy-control " + ruleName);
-                logDryRunCommand("no address-object " + objName);
-                logDryRunCommand("address-object " + objName + " host " + m.ip);
+                logDryRunCommand(ZyxelFirewallCmd::cmdDeleteRule(ruleName));
+                logDryRunCommand(ZyxelObjectCmd::cmdDeleteAddress(objName));
+                logDryRunCommand(ZyxelObjectCmd::cmdAddAddressHost(objName, m.ip));
                 logDryRunCommand("exit");
-                logDryRunCommand("policy-control rule-insert 1");
-                logDryRunCommand("name " + ruleName);
+                logDryRunCommand("secure-policy insert 1");
+                logDryRunCommand("description " + ruleName);
                 logDryRunCommand("action deny");
-                logDryRunCommand("source-ip " + objName);
-                if (!cleanReason.empty()) {
-                    logDryRunCommand("description \"NetMon Auto-Block: " + cleanReason + "\"");
-                }
+                logDryRunCommand("sourceip " + objName);
                 logDryRunCommand("activate");
                 logDryRunCommand("exit");
                 logDryRunCommand("exit");
             } else if (m.op == "unblock") {
                 logDryRunCommand("configure terminal");
-                logDryRunCommand("no policy-control " + ruleName);
-                logDryRunCommand("no address-object " + objName);
+                logDryRunCommand(ZyxelFirewallCmd::cmdDeleteRule(ruleName));
+                logDryRunCommand(ZyxelObjectCmd::cmdDeleteAddress(objName));
                 logDryRunCommand("exit");
             }
         }
@@ -985,7 +1171,7 @@ bool ZyxelDriver::replayJournalUnlocked() {
             }
 
             // Step 1: Delete by name first (rule, then address-object). Missing object is success.
-            res = _sshClient.executeCommand("no policy-control " + ruleName, out);
+            res = _sshClient.executeCommand(ZyxelFirewallCmd::cmdDeleteRule(ruleName), out);
             if (res == SshResult::ERR_TIMEOUT ||
                 res == SshResult::ERR_DISCONNECTED ||
                 res == SshResult::ERR_CHANNEL_FAILED) {
@@ -993,7 +1179,7 @@ bool ZyxelDriver::replayJournalUnlocked() {
                 break;
             }
 
-            // As soon as no policy-control returns a prompt, demote row to pending on disk
+            // As soon as no secure-policy returns a prompt, demote row to pending on disk
             // because the live rule is no longer in running-config.
             m.state = "pending";
             {
@@ -1011,7 +1197,7 @@ bool ZyxelDriver::replayJournalUnlocked() {
                 }
             }
 
-            res = _sshClient.executeCommand("no address-object " + objName, out);
+            res = _sshClient.executeCommand(ZyxelObjectCmd::cmdDeleteAddress(objName), out);
             if (res == SshResult::ERR_TIMEOUT ||
                 res == SshResult::ERR_DISCONNECTED ||
                 res == SshResult::ERR_CHANNEL_FAILED) {
@@ -1020,7 +1206,7 @@ bool ZyxelDriver::replayJournalUnlocked() {
             }
 
             // Step 2: Frozen insert sequence
-            std::string cmdObj = "address-object " + objName + " host " + m.ip;
+            std::string cmdObj = ZyxelObjectCmd::cmdAddAddressHost(objName, m.ip);
             res = _sshClient.executeCommand(cmdObj, out);
             if (res == SshResult::ERR_TIMEOUT ||
                 res == SshResult::ERR_DISCONNECTED ||
@@ -1039,7 +1225,7 @@ bool ZyxelDriver::replayJournalUnlocked() {
             }
             _sshClient.executeCommand("exit", out);
 
-            res = _sshClient.executeCommand("policy-control rule-insert 1", out);
+            res = _sshClient.executeCommand("secure-policy insert 1", out);
             if (res == SshResult::ERR_TIMEOUT ||
                 res == SshResult::ERR_DISCONNECTED ||
                 res == SshResult::ERR_CHANNEL_FAILED) {
@@ -1060,7 +1246,7 @@ bool ZyxelDriver::replayJournalUnlocked() {
                 break;
             }
 
-            res = _sshClient.executeCommand("name " + ruleName, out);
+            res = _sshClient.executeCommand("description " + ruleName, out);
             if (out.find("already exists") != std::string::npos ||
                 out.find("duplicated") != std::string::npos) {
                 // Duplicate name after by-name delete means delete did not remove live rule.
@@ -1086,24 +1272,13 @@ bool ZyxelDriver::replayJournalUnlocked() {
                 break;
             }
 
-            res = _sshClient.executeCommand("source-ip " + objName, out);
+            res = _sshClient.executeCommand("sourceip " + objName, out);
             if (res != SshResult::SUCCESS) {
                 executeRollback(m.sanitizedName);
                 if (ZyxelSshClient::isSyntaxError(out)) {
                     removeMutationFromJournal(m.id);
                 }
                 break;
-            }
-
-            if (!cleanReason.empty()) {
-                res = _sshClient.executeCommand("description \"NetMon Auto-Block: " + cleanReason + "\"", out);
-                if (res != SshResult::SUCCESS) {
-                    executeRollback(m.sanitizedName);
-                    if (ZyxelSshClient::isSyntaxError(out)) {
-                        removeMutationFromJournal(m.id);
-                    }
-                    break;
-                }
             }
 
             res = _sshClient.executeCommand("activate", out);

@@ -98,11 +98,37 @@ nlohmann::json ZyxelDriver::unblockIp(const std::string &ip) {
     return RecordingRouter::getInstance().unblockIp(ip);
 }
 
+nlohmann::json ZyxelDriver::ping(const std::string &target, int count) {
+    return {
+        {"status", "ok"},
+        {"type", "ping"},
+        {"target", target},
+        {"packets_transmitted", count},
+        {"packets_received", count},
+        {"packet_loss_percent", 0.0},
+        {"min_latency_ms", 1.0},
+        {"avg_latency_ms", 2.0},
+        {"max_latency_ms", 3.0}
+    };
+}
+
+nlohmann::json ZyxelDriver::traceroute(const std::string &target) {
+    return {
+        {"status", "ok"},
+        {"type", "traceroute"},
+        {"target", target},
+        {"packets_received", 3}
+    };
+}
+
 ZyxelDriver &ZyxelDriver::getInstance() {
     return RecordingRouter::getInstance();
 }
 
 void ZyxelDriver::clearAuthFailure() {
+}
+
+void ZyxelDriver::cancelActiveCommand() {
 }
 
 /*

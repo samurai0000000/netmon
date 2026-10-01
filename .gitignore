@@ -10,3 +10,5 @@ plan/*
 !plan/done/
 test_data/
 .claude
+test/fuzz/corpus/
+test/fuzz/reproducers/

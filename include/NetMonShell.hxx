@@ -21,6 +21,9 @@ public:
     int executeCommand(const std::string &cmdLine);
     void resetForTesting();
 
+    bool isExecutingCommand() const;
+    void cancelCurrentCommand();
+
 private:
     NetMonShell();
     ~NetMonShell() = default;
@@ -48,9 +51,13 @@ private:
     void cmdAuthSetPassword(const std::string &currentPass, const std::string &newPass);
     void cmdRouterSetPassword();
     void cmdRouterClearPassword();
+    void cmdRouterStatus();
+    void cmdRouterPing(const std::string &target, int count = 4);
+    void cmdRouterTraceroute(const std::string &target);
     bool isAuthenticated() const;
 
     std::atomic<bool> _running;
+    std::atomic<bool> _executingCommand;
     std::string       _sessionToken;
 };
 

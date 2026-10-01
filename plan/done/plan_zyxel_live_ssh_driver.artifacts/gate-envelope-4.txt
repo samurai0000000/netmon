@@ -1,0 +1,11 @@
+project: netmon
+envelope: envelope-4
+language: c++
+risk: memory
+red_command: make test
+red_result: fail
+green_command: make test
+green_result: pass
+sanitizer_command: make test CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" CXXFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="-fsanitize=address,undefined"
+rapidcheck: not_applicable
+other_isa: not applicable: host only

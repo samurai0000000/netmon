@@ -29,7 +29,10 @@
 static volatile sig_atomic_t g_shutdownRequested = 0;
 
 static void signalHandler(int sig) {
-    (void)sig;
+    if (sig == SIGINT && NetMonShell::getInstance().isExecutingCommand()) {
+        NetMonShell::getInstance().cancelCurrentCommand();
+        return;
+    }
     g_shutdownRequested = 1;
     WebServer::getInstance().stop();
     SnmpAggregator::getInstance().stop();

@@ -12,6 +12,7 @@
 #include "AuthManager.hxx"
 #include "SecurityCheckpoint.hxx"
 #include "SnmpDatabase.hxx"
+#include "ZyxelDriver.hxx"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -51,7 +52,16 @@ NetMonShell &NetMonShell::getInstance() {
 }
 
 NetMonShell::NetMonShell()
-    : _running(false) {
+    : _running(false),
+      _executingCommand(false) {
+}
+
+bool NetMonShell::isExecutingCommand() const {
+    return _executingCommand.load();
+}
+
+void NetMonShell::cancelCurrentCommand() {
+    ZyxelDriver::getInstance().cancelActiveCommand();
 }
 
 static std::string formatRelativeTime(time_t timestamp) {
@@ -106,6 +116,9 @@ void NetMonShell::printHelp() const {
     std::cout << "  reload                       Reload configuration and devices registry" << std::endl;
     std::cout << "  auth login <password>        Authenticate local operator session" << std::endl;
     std::cout << "  auth set-password <old> <new>Change admin password (requires old password)" << std::endl;
+    std::cout << "  router status                Show router model, firmware, build date, and connection" << std::endl;
+    std::cout << "  router ping <host> [count]   Run router-side ICMP diagnostic ping (default count: 4)" << std::endl;
+    std::cout << "  router traceroute <host>     Run router-side route trace" << std::endl;
     std::cout << "  router set-password          Store router password interactively in encrypted vault" << std::endl;
     std::cout << "  router clear-password        Clear router password from encrypted vault" << std::endl;
     std::cout << "  policy [mode]                View or update policy (disabled, dry_run, require_approval, live)" << std::endl;
@@ -306,6 +319,8 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
         return 0;
     }
 
+    _executingCommand.store(true);
+
     if (cmd == "help" || cmd == "?") {
         printHelp();
     } else if (cmd == "status") {
@@ -355,8 +370,30 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
             cmdRouterSetPassword();
         } else if (subCmd == "clear-password") {
             cmdRouterClearPassword();
+        } else if (subCmd == "status") {
+            cmdRouterStatus();
+        } else if (subCmd == "ping") {
+            std::string host;
+            iss >> host;
+            int count = 4;
+            if (!(iss >> count) || count <= 0) {
+                count = 4;
+            }
+            if (host.empty()) {
+                std::cout << "Usage: router ping <host> [count]" << std::endl;
+            } else {
+                cmdRouterPing(host, count);
+            }
+        } else if (subCmd == "traceroute") {
+            std::string host;
+            iss >> host;
+            if (host.empty()) {
+                std::cout << "Usage: router traceroute <host>" << std::endl;
+            } else {
+                cmdRouterTraceroute(host);
+            }
         } else {
-            std::cout << "Usage: router set-password | router clear-password" << std::endl;
+            std::cout << "Usage: router status | router ping <host> [count] | router traceroute <host> | router set-password | router clear-password" << std::endl;
         }
     } else if (cmd == "policy") {
         std::string mode;
@@ -392,11 +429,13 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
         iss >> lim;
         cmdSyslog(lim > 0 ? lim : 50);
     } else if (cmd == "quit" || cmd == "exit") {
+        _executingCommand.store(false);
         return -1;
     } else {
         std::cout << "Unknown command: '" << cmd << "'. Type 'help' for available commands." << std::endl;
     }
 
+    _executingCommand.store(false);
     return 0;
 }
 
@@ -457,6 +496,80 @@ void NetMonShell::cmdRouterClearPassword() {
         std::cout << "Router password cleared from vault." << std::endl;
     } else {
         std::cout << "Error: Failed to clear router password from vault." << std::endl;
+    }
+}
+
+void NetMonShell::cmdRouterStatus() {
+    auto res = ZyxelDriver::getInstance().getStatus();
+    std::cout << "--- Zyxel Gateway Status ---" << std::endl;
+    std::cout << "Status:       " << res.value("status", "unknown") << std::endl;
+    std::cout << "Driver:       " << res.value("driver", "") << std::endl;
+    if (res.contains("model")) {
+        std::cout << "Model:        " << res.value("model", "") << std::endl;
+    }
+    if (res.contains("firmware")) {
+        std::cout << "Firmware:     " << res.value("firmware", "") << std::endl;
+    }
+    if (res.contains("build_date")) {
+        std::cout << "Build Date:   " << res.value("build_date", "") << std::endl;
+    }
+    if (res.contains("serial_number") && !res["serial_number"].get<std::string>().empty()) {
+        std::cout << "Serial:       " << res.value("serial_number", "") << std::endl;
+    }
+    if (res.contains("transport")) {
+        std::cout << "Transport:    " << res.value("transport", "") << std::endl;
+    }
+    if (res.contains("error")) {
+        std::cout << "Error:        " << res.value("error", "") << std::endl;
+    }
+    if (res.contains("note")) {
+        std::cout << "Note:         " << res.value("note", "") << std::endl;
+    }
+}
+
+void NetMonShell::cmdRouterPing(const std::string &target, int count) {
+    std::cout << "Pinging " << target << " (" << count << " packets) via Zyxel gateway (Ctrl+C to cancel)..." << std::endl;
+    auto res = ZyxelDriver::getInstance().ping(target, count);
+    if (res.value("status", "") == "canceled") {
+        std::cout << "\n^C\nPing canceled by operator." << std::endl;
+        return;
+    }
+    if (res.value("status", "") != "ok") {
+        std::cout << "Error: " << res.value("error", "Unknown ping error") << std::endl;
+        return;
+    }
+
+    std::cout << "--- Zyxel Router Ping Probe: " << target << " ---" << std::endl;
+    std::cout << "Packets:      " << res.value("packets_transmitted", 0) << " transmitted, "
+              << res.value("packets_received", 0) << " received, "
+              << std::fixed << std::setprecision(1) << res.value("packet_loss_percent", 0.0) << "% loss" << std::endl;
+    if (res.value("packets_received", 0) > 0) {
+        std::cout << "Round-Trip:   min = " << std::fixed << std::setprecision(2) << res.value("min_latency_ms", 0.0)
+                  << " ms, avg = " << res.value("avg_latency_ms", 0.0)
+                  << " ms, max = " << res.value("max_latency_ms", 0.0) << " ms" << std::endl;
+    }
+}
+
+void NetMonShell::cmdRouterTraceroute(const std::string &target) {
+    std::cout << "Traceroute to " << target << " via Zyxel gateway (up to 60s, Ctrl+C to cancel)..." << std::endl;
+    auto res = ZyxelDriver::getInstance().traceroute(target);
+    if (res.value("status", "") == "canceled") {
+        std::cout << "\n^C\nTraceroute canceled by operator." << std::endl;
+        return;
+    }
+    if (res.value("status", "") != "ok") {
+        std::cout << "Error: " << res.value("error", "Unknown traceroute error") << std::endl;
+        if (res.contains("raw_output") && !res["raw_output"].get<std::string>().empty()) {
+            std::cout << res["raw_output"].get<std::string>() << std::endl;
+        }
+        return;
+    }
+
+    std::cout << "--- Zyxel Router Traceroute: " << target << " ---" << std::endl;
+    if (res.contains("raw_output") && !res["raw_output"].get<std::string>().empty()) {
+        std::cout << res["raw_output"].get<std::string>() << std::endl;
+    } else {
+        std::cout << "Hops received: " << res.value("packets_received", 0) << std::endl;
     }
 }
 
@@ -641,6 +754,7 @@ void NetMonShell::stop() {
 
 void NetMonShell::resetForTesting() {
     _running.store(false);
+    _executingCommand.store(false);
     std::string().swap(_sessionToken);
 }
 

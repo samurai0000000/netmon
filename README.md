@@ -42,7 +42,7 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
   - Omits `CAP_NET_ADMIN` to ensure the process cannot alter routing tables, interface IPs, or host firewall rules.
   - Configuration directory is enforced to `0700` (`drwx------`) and files to `0600` (`-rw-------`).
   - Router credentials reside solely in `AuthManager`'s AES-256-GCM encrypted vault (`~/.config/netmon/vault.enc`), provisioned interactively via `router set-password`. Plaintext config passwords and `NETMON_ROUTER_PASSWORD` environment overrides are not supported.
-  - Zyxel USG firewall integration is **Experimental / Disabled by Default / Live Unqualified** (`router_live_enabled = false`, `router_flash_write = false`). Unit tests cover local in-memory state and PTY parsing only—not live ZySH execution on hardware.
+  - Zyxel USG/ATP firewall integration is **Production Qualified on USG FLEX 200** (see [`ZyxelDriver.md`](ZyxelDriver.md) for full architecture and command catalog). Defaults to safe mode (`router_live_enabled = false`, `router_flash_write = false`) unless explicitly enabled by the operator.
   - Supports 12-factor environment variable configuration injection (`NETMON_ROUTER_USER`, `NETMON_ROUTER_KEY_PATH`, `NETMON_ROUTER_DRY_RUN`, `NETMON_SNMP_*`, `NETMON_DB_*`, `NETMON_WEB_*`).
 - **Interactive Diagnostic Shell**:
   - Embedded interactive terminal CLI with real-time status, device, and traffic reports.
@@ -126,10 +126,10 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
 | **`lan_name_device`** | Write | Assigns friendly names and categories (`known`, `visitor`, `iot`, etc.) persisted to `devices.cfg`. |
 | **`lan_get_top_talkers`** | Read | Top bandwidth consumers over rolling windows (default: 15m, configurable). |
 | **`lan_get_traffic_summary`** | Read | Real-time throughput, packet rates, active capture engine status, and protocol breakdown. |
-| **`firewall_get_status`** | Read (Experimental) | Router hardware model, firmware, link state (when live mode enabled). |
-| **`firewall_get_sessions`** | Read (Experimental) | Active router state table / connection sessions (when live mode enabled). |
-| **`firewall_block_ip`** | Write (Experimental) | Drops IP address via router firewall (when live mode enabled; checked against invariants). |
-| **`firewall_unblock_ip`** | Write (Experimental) | Removes router drop rule for specified IP (when live mode enabled). |
+| **`firewall_get_status`** | Read | Router hardware model, firmware, link state (live qualified on USG FLEX 200). |
+| **`firewall_get_sessions`** | Read | Active router state table / connection sessions (live qualified on USG FLEX 200). |
+| **`firewall_block_ip`** | Write | Drops IP address via router firewall (when live mode enabled; checked against invariants). |
+| **`firewall_unblock_ip`** | Write | Removes router drop rule for specified IP (when live mode enabled). |
 | **`snmp_get_wan_status`** | Read | Dedicated dual-WAN uplink rates, 5-min averages, 24-hr peaks, and daily GB transfers. |
 | **`snmp_get_device_metrics`** | Read | SNMP system metrics, uptime, and 3-tier filtered active interfaces. |
 | **`snmp_get_interface_counters`** | Read | Line speeds, 64-bit HC octet counters, and packet error counts for specific ports. |

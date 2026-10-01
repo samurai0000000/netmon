@@ -7,6 +7,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <cstring>
 
 #include "ZyxelSshClient.hxx"
 #include <CppUTest/TestHarness.h>
@@ -130,6 +131,176 @@ TEST(ZyxelSshClientTest, SyntaxErrorDetectionMatchesExplicitZySHErrors) {
     CHECK_FALSE(ZyxelSshClient::isSyntaxError("Router#"));
     CHECK_FALSE(ZyxelSshClient::isSyntaxError("Connection dropped by peer"));
     CHECK_FALSE(ZyxelSshClient::isSyntaxError("Channel read timeout"));
+}
+
+TEST(ZyxelSshClientTest, TrailingPromptStripping) {
+    // Strips Router> prompt and trims trailing whitespace
+    std::string out1 = " 1  * * *\n 2  168.95.105.138  10.370 ms\nRouter> ";
+    STRCMP_EQUAL(" 1  * * *\n 2  168.95.105.138  10.370 ms",
+                 ZyxelSshClient::stripTrailingPrompt(out1).c_str());
+
+    // Strips Router# prompt
+    std::string out2 = "ZyWALL USG FLEX 200\r\nRouter#";
+    STRCMP_EQUAL("ZyWALL USG FLEX 200",
+                 ZyxelSshClient::stripTrailingPrompt(out2).c_str());
+
+    // Strips submode prompt Router(config)#
+    std::string out3 = "address-object host NETMON_BLK_1_2_3_4\nRouter(config)# ";
+    STRCMP_EQUAL("address-object host NETMON_BLK_1_2_3_4",
+                 ZyxelSshClient::stripTrailingPrompt(out3).c_str());
+
+    // Output without prompt is preserved
+    std::string out4 = "Standard output with no prompt\n";
+    STRCMP_EQUAL("Standard output with no prompt",
+                 ZyxelSshClient::stripTrailingPrompt(out4).c_str());
+
+    // Empty string
+    STRCMP_EQUAL("", ZyxelSshClient::stripTrailingPrompt("").c_str());
+}
+
+TEST(ZyxelSshClientTest, CommandCancellationState) {
+    ZyxelSshClient client;
+    CHECK_FALSE(client.isCancelled());
+
+    client.cancelActiveCommand();
+    CHECK_TRUE(client.isCancelled());
+
+    client.resetForTesting();
+    CHECK_FALSE(client.isCancelled());
+}
+
+TEST(ZyxelSshClientTest, DrainUntilPromptHandlesZeroByteReadsWithoutPrematureExit) {
+    ZyxelSshClient client;
+    int callCount = 0;
+    std::string payload = "traceroute to 8.8.8.8\n 1  192.168.1.1  1.2 ms\nRouter> ";
+
+    auto reader = [&](char *buf, size_t buflen, bool &eofOut) -> ssize_t {
+        (void)buflen;
+        eofOut = false;
+        callCount++;
+        // First 3 calls return 0 (no payload yet, but not EOF)
+        if (callCount <= 3) {
+            return 0;
+        }
+        // 4th call delivers full payload
+        if (callCount == 4) {
+            std::memcpy(buf, payload.data(), payload.size());
+            return static_cast<ssize_t>(payload.size());
+        }
+        return 0;
+    };
+
+    auto writer = [](const char *data, size_t len) {
+        (void)data;
+        (void)len;
+    };
+
+    std::string out;
+    SshResult res = client.drainUntilPromptForTesting(reader, writer, out, 1000);
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(res));
+    CHECK_TRUE(out.find("192.168.1.1") != std::string::npos);
+    CHECK_TRUE(out.find("Router>") != std::string::npos);
+    CHECK_TRUE(callCount >= 4);
+}
+
+TEST(ZyxelSshClientTest, DrainUntilPromptDetectsTrueEofAsChannelFailed) {
+    ZyxelSshClient client;
+    auto reader = [](char *buf, size_t buflen, bool &eofOut) -> ssize_t {
+        (void)buf;
+        (void)buflen;
+        eofOut = true; // True channel EOF without matching prompt
+        return 0;
+    };
+
+    auto writer = [](const char *data, size_t len) {
+        (void)data;
+        (void)len;
+    };
+
+    std::string out;
+    SshResult res = client.drainUntilPromptForTesting(reader, writer, out, 500);
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_CHANNEL_FAILED), static_cast<int>(res));
+}
+
+TEST(ZyxelSshClientTest, DrainUntilPromptHandlesEagainAndChunkedDelivery) {
+    ZyxelSshClient client;
+    int step = 0;
+    std::string chunk1 = " 1  192.168.1.1 1.2 ms\n";
+    std::string chunk2 = " 2  8.8.8.8 12.3 ms\nRouter> ";
+
+    auto reader = [&](char *buf, size_t buflen, bool &eofOut) -> ssize_t {
+        (void)buflen;
+        eofOut = false;
+        step++;
+        if (step == 1) {
+            return LIBSSH2_ERROR_EAGAIN;
+        } else if (step == 2) {
+            std::memcpy(buf, chunk1.data(), chunk1.size());
+            return static_cast<ssize_t>(chunk1.size());
+        } else if (step == 3) {
+            return 0; // zero-byte read between chunks
+        } else if (step == 4) {
+            std::memcpy(buf, chunk2.data(), chunk2.size());
+            return static_cast<ssize_t>(chunk2.size());
+        }
+        return 0;
+    };
+
+    auto writer = [](const char *data, size_t len) {
+        (void)data;
+        (void)len;
+    };
+
+    std::string out;
+    SshResult res = client.drainUntilPromptForTesting(reader, writer, out, 1000);
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(res));
+    CHECK_TRUE(out.find("192.168.1.1") != std::string::npos);
+    CHECK_TRUE(out.find("8.8.8.8") != std::string::npos);
+    CHECK_TRUE(out.find("Router>") != std::string::npos);
+}
+
+TEST(ZyxelSshClientTest, DrainUntilPromptTimesOut) {
+    ZyxelSshClient client;
+    auto reader = [](char *buf, size_t buflen, bool &eofOut) -> ssize_t {
+        (void)buf;
+        (void)buflen;
+        eofOut = false;
+        return 0; // endless non-blocking empty packets
+    };
+
+    auto writer = [](const char *data, size_t len) {
+        (void)data;
+        (void)len;
+    };
+
+    std::string out;
+    SshResult res = client.drainUntilPromptForTesting(reader, writer, out, 50);
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_TIMEOUT), static_cast<int>(res));
+}
+
+TEST(ZyxelSshClientTest, DrainUntilPromptHandlesCancellation) {
+    ZyxelSshClient client;
+    client.cancelActiveCommand();
+
+    std::string writtenData;
+    auto reader = [&](char *buf, size_t buflen, bool &eofOut) -> ssize_t {
+        (void)buflen;
+        eofOut = false;
+        if (!writtenData.empty()) {
+            std::memcpy(buf, "Router> ", 8);
+            return 8;
+        }
+        return 0;
+    };
+
+    auto writer = [&](const char *data, size_t len) {
+        writtenData.append(data, len);
+    };
+
+    std::string out;
+    SshResult res = client.drainUntilPromptForTesting(reader, writer, out, 500);
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_INTERRUPTED), static_cast<int>(res));
+    STRCMP_EQUAL("\x03\n", writtenData.c_str());
 }
 
 /*

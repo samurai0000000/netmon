@@ -32,7 +32,8 @@ ZyxelSshClient::ZyxelSshClient()
       _socketFd(-1),
       _session(nullptr),
       _channel(nullptr),
-      _state(SshClientState::DISCONNECTED) {
+      _state(SshClientState::DISCONNECTED),
+      _cancelled(false) {
     _pinPath = Config::resolveHomePath("~/.config/netmon/router_hostkey.pin");
 }
 
@@ -64,6 +65,15 @@ void ZyxelSshClient::resetForTesting() {
     _lastMatchedPrompt.clear();
     _lastMatchedPrompt.shrink_to_fit();
     _state = SshClientState::DISCONNECTED;
+    _cancelled.store(false);
+}
+
+void ZyxelSshClient::cancelActiveCommand() {
+    _cancelled.store(true);
+}
+
+bool ZyxelSshClient::isCancelled() const {
+    return _cancelled.load();
 }
 
 bool ZyxelSshClient::isConnected() const {
@@ -282,6 +292,9 @@ SshResult ZyxelSshClient::connect(const std::string &password) {
 
     _state = SshClientState::AUTHENTICATED;
 
+    // Switch to non-blocking mode for interactive prompt and cancel polling
+    libssh2_session_set_blocking(_session, 0);
+
     // Drain initial login banner until prompt
     std::string initOutput;
     drainUntilPrompt(initOutput, 5000);
@@ -401,6 +414,29 @@ std::string ZyxelSshClient::stripCommandEcho(const std::string &buffer, const st
     return cleaned;
 }
 
+std::string ZyxelSshClient::stripTrailingPrompt(const std::string &buffer) {
+    std::string cleaned = stripAnsiEscapes(buffer);
+    if (cleaned.empty()) {
+        return cleaned;
+    }
+
+    // Match prompt strictly at trailing end of buffer
+    // Handles: Router#, Router>, Router(config)#, Router(config-policy-control)#, usg-flex-200#
+    static const std::regex trailingPromptRegex(R"((?:[\r\n]|^)[\w.-]+(?:\([A-Za-z0-9_.-]+\))?[>#]\s*$)");
+    std::smatch match;
+    if (std::regex_search(cleaned, match, trailingPromptRegex)) {
+        cleaned = cleaned.substr(0, match.position());
+    }
+
+    // Trim trailing whitespace and newlines
+    while (!cleaned.empty() && (cleaned.back() == ' ' || cleaned.back() == '\t' ||
+                                cleaned.back() == '\r' || cleaned.back() == '\n')) {
+        cleaned.pop_back();
+    }
+
+    return cleaned;
+}
+
 bool ZyxelSshClient::isConfigLocked(const std::string &buffer) {
     return (buffer.find("% Configuration is locked") != std::string::npos);
 }
@@ -446,31 +482,63 @@ std::string ZyxelSshClient::sanitizeIpToObjectName(const std::string &ip) {
     return name;
 }
 
-SshResult ZyxelSshClient::drainUntilPrompt(std::string &outputOut, int timeoutMs) {
+SshResult ZyxelSshClient::drainUntilPromptWithReader(
+    const ChannelReader &reader,
+    const ChannelWriter &writer,
+    std::string &outputOut,
+    int timeoutMs) {
     outputOut.clear();
-    if (!_channel) {
-        return SshResult::ERR_DISCONNECTED;
-    }
 
     std::string rawBuffer;
     char chunk[512];
     auto startTime = std::chrono::steady_clock::now();
 
     while (true) {
+        if (_cancelled.load()) {
+            _cancelled.store(false);
+            if (writer) {
+                // Send Ctrl+C (ASCII 0x03) to abort running command on the router
+                writer("\x03\n", 2);
+                std::string drainBuf;
+                auto drainStart = std::chrono::steady_clock::now();
+                while (std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - drainStart).count() < 1500) {
+                    bool eof = false;
+                    ssize_t dn = reader(chunk, sizeof(chunk) - 1, eof);
+                    if (dn > 0) {
+                        chunk[dn] = '\0';
+                        drainBuf.append(chunk, dn);
+                        std::string p;
+                        if (matchPrompt(drainBuf, p)) {
+                            _lastMatchedPrompt = p;
+                            break;
+                        }
+                    } else if (dn == LIBSSH2_ERROR_EAGAIN || (dn == 0 && !eof)) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    } else {
+                        break;
+                    }
+                }
+            }
+            outputOut = stripTrailingPrompt(stripAnsiEscapes(rawBuffer));
+            return SshResult::ERR_INTERRUPTED;
+        }
+
         auto now = std::chrono::steady_clock::now();
         int elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
         if (elapsedMs > timeoutMs) {
             return SshResult::ERR_TIMEOUT;
         }
 
-        ssize_t n = libssh2_channel_read(_channel, chunk, sizeof(chunk) - 1);
+        bool eof = false;
+        ssize_t n = reader(chunk, sizeof(chunk) - 1, eof);
         if (n > 0) {
             chunk[n] = '\0';
             rawBuffer.append(chunk, n);
 
             // Handle --More-- pagination prompt by sending space to advance
-            if (rawBuffer.find("--More--") != std::string::npos) {
-                libssh2_channel_write(_channel, " ", 1);
+            if (rawBuffer.find("--More--") != std::string::npos && writer) {
+                writer(" ", 1);
             }
 
             std::string prompt;
@@ -479,32 +547,83 @@ SshResult ZyxelSshClient::drainUntilPrompt(std::string &outputOut, int timeoutMs
                 outputOut = stripAnsiEscapes(rawBuffer);
                 return SshResult::SUCCESS;
             }
-        } else if (n == LIBSSH2_ERROR_EAGAIN) {
+        } else if (n == LIBSSH2_ERROR_EAGAIN || (n == 0 && !eof)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         } else if (n < 0) {
             return SshResult::ERR_CHANNEL_FAILED;
         } else {
-            // EOF reached
-            outputOut = stripAnsiEscapes(rawBuffer);
-            return SshResult::SUCCESS;
+            // n == 0 && eof == true: channel closed by remote host
+            std::string prompt;
+            if (matchPrompt(rawBuffer, prompt)) {
+                _lastMatchedPrompt = prompt;
+                outputOut = stripAnsiEscapes(rawBuffer);
+                return SshResult::SUCCESS;
+            }
+            return SshResult::ERR_CHANNEL_FAILED;
         }
     }
+}
+
+SshResult ZyxelSshClient::drainUntilPrompt(std::string &outputOut, int timeoutMs) {
+    if (!_channel) {
+        return SshResult::ERR_DISCONNECTED;
+    }
+
+    auto reader = [this](char *buf, size_t buflen, bool &eofOut) -> ssize_t {
+        if (!_channel) {
+            eofOut = true;
+            return -1;
+        }
+        ssize_t n = libssh2_channel_read(_channel, buf, buflen);
+        eofOut = (libssh2_channel_eof(_channel) != 0);
+        return n;
+    };
+
+    auto writer = [this](const char *data, size_t len) {
+        if (_channel) {
+            libssh2_channel_write(_channel, data, len);
+        }
+    };
+
+    return drainUntilPromptWithReader(reader, writer, outputOut, timeoutMs);
+}
+
+SshResult ZyxelSshClient::drainUntilPromptForTesting(
+    const ChannelReader &reader,
+    const ChannelWriter &writer,
+    std::string &outputOut,
+    int timeoutMs) {
+    return drainUntilPromptWithReader(reader, writer, outputOut, timeoutMs);
 }
 
 SshResult ZyxelSshClient::executeCommandUnlocked(const std::string &command,
                                                 std::string &outputOut,
                                                 int timeoutMs) {
     outputOut.clear();
+    _cancelled.store(false);
 
     if (_state != SshClientState::AUTHENTICATED || !_channel) {
         return SshResult::ERR_DISCONNECTED;
     }
 
+    // Flush any stale unread bytes left in the channel from previous commands or timeouts
+    char discard[512];
+    while (libssh2_channel_read(_channel, discard, sizeof(discard)) > 0) {}
+
     std::string cmdToSend = command + "\n";
-    ssize_t written = libssh2_channel_write(_channel, cmdToSend.c_str(), cmdToSend.size());
-    if (written <= 0) {
-        disconnect();
-        return SshResult::ERR_CHANNEL_FAILED;
+    size_t totalWritten = 0;
+    while (totalWritten < cmdToSend.size()) {
+        ssize_t written = libssh2_channel_write(_channel,
+                                                cmdToSend.c_str() + totalWritten,
+                                                cmdToSend.size() - totalWritten);
+        if (written > 0) {
+            totalWritten += written;
+        } else if (written == LIBSSH2_ERROR_EAGAIN) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        } else {
+            disconnect();
+            return SshResult::ERR_CHANNEL_FAILED;
+        }
     }
 
     SshResult res = drainUntilPrompt(outputOut, timeoutMs);

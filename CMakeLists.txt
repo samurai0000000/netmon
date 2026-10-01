@@ -80,6 +80,12 @@ set(SOURCES
     src/AuthManager.cxx
     src/SyslogServer.cxx
     src/InstanceLock.cxx
+    src/zyxel/ZyxelScanner.cxx
+    src/zyxel/ZyxelSystemCmd.cxx
+    src/zyxel/ZyxelNetworkCmd.cxx
+    src/zyxel/ZyxelObjectCmd.cxx
+    src/zyxel/ZyxelFirewallCmd.cxx
+    src/zyxel/ZyxelNatCmd.cxx
 )
 
 add_executable(netmon ${SOURCES})
@@ -208,10 +214,22 @@ endif()
 # Dedicated live driver & parser test suite executable
 set(ZYXEL_TEST_SOURCES
     test/TestZyxelMain.cxx
+    test/TestZyxelScanner.cxx
     test/TestZyxelSshClient.cxx
     test/TestZyxelDriver.cxx
+    test/TestZyxelSystemCmd.cxx
+    test/TestZyxelNetworkCmd.cxx
+    test/TestZyxelObjectCmd.cxx
+    test/TestZyxelFirewallCmd.cxx
+    test/TestZyxelNatCmd.cxx
     src/ZyxelDriver.cxx
     src/ZyxelSshClient.cxx
+    src/zyxel/ZyxelScanner.cxx
+    src/zyxel/ZyxelSystemCmd.cxx
+    src/zyxel/ZyxelNetworkCmd.cxx
+    src/zyxel/ZyxelObjectCmd.cxx
+    src/zyxel/ZyxelFirewallCmd.cxx
+    src/zyxel/ZyxelNatCmd.cxx
     src/AuthManager.cxx
     src/Config.cxx
 )
@@ -266,8 +284,39 @@ if(CPPUTEST_LIBRARY_DIRS)
     target_link_directories(test_zyxel_driver_suite PRIVATE ${CPPUTEST_LIBRARY_DIRS})
 endif()
 
+add_executable(test_zyxel_parsers_fuzz
+    test/fuzz/TestZyxelParsersFuzz.cxx
+    src/zyxel/ZyxelScanner.cxx
+    src/zyxel/ZyxelSystemCmd.cxx
+    src/zyxel/ZyxelNetworkCmd.cxx
+    src/zyxel/ZyxelObjectCmd.cxx
+    src/zyxel/ZyxelFirewallCmd.cxx
+    src/zyxel/ZyxelNatCmd.cxx
+    src/ZyxelSshClient.cxx
+    src/Config.cxx
+)
+
+target_include_directories(test_zyxel_parsers_fuzz PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json/include
+    ${LIBSSH2_INCLUDE_DIRS}
+    ${OPENSSL_INCLUDE_DIRS}
+    ${CONFIGPP_INCLUDE_DIRS}
+)
+
+target_link_libraries(test_zyxel_parsers_fuzz PRIVATE
+    rapidcheck
+    ${LIBSSH2_LIBRARIES}
+    ${OPENSSL_LIBRARIES}
+    ${CONFIGPP_LIBRARIES}
+    Threads::Threads
+)
+
 add_custom_target(test
     COMMAND test_netmon_suite -v
     COMMAND test_zyxel_driver_suite -v
-    DEPENDS test_netmon_suite test_zyxel_driver_suite
+    COMMAND test_zyxel_parsers_fuzz
+    DEPENDS test_netmon_suite test_zyxel_driver_suite test_zyxel_parsers_fuzz
 )
+

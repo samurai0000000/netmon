@@ -15,6 +15,7 @@
 #include "AuthManager.hxx"
 #include "ZyxelSshClient.hxx"
 #include "ZyxelDriver.hxx"
+#include "zyxel/ZyxelScanner.hxx"
 
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/MemoryLeakWarningPlugin.h>
@@ -63,7 +64,18 @@ int main(int argc, char **argv) {
         ZyxelSshClient::matchPrompt("Router#", warmupPrompt);
         ZyxelSshClient::stripAnsiEscapes("\033[32mwarmup\033[0m");
         ZyxelSshClient::stripCommandEcho("warmup\r\noutput", "warmup");
+        ZyxelSshClient::stripTrailingPrompt("Router#");
         ZyxelSshClient::sanitizeReason("warmup");
+
+        double warmupPct = 0.0;
+        int warmupInt = 0;
+        ZyxelScanner::extractPercentage("warmup 50%", warmupPct);
+        ZyxelScanner::extractIntegerAfter("warmup: 42", "warmup", warmupInt);
+        auto warmupCols = ZyxelScanner::parseTableColumns("Col1  Col2", "====  ====");
+        if (!warmupCols.empty()) {
+            ZyxelScanner::extractCell("val1  val2", warmupCols[0]);
+        }
+        ZyxelScanner::sanitizeSnippet("warmup snippet");
     }
 
     int result = CommandLineTestRunner::RunAllTests(argc, argv);

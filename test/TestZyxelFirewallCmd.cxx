@@ -1,0 +1,149 @@
+/*
+ * TestZyxelFirewallCmd.cxx
+ *
+ * Copyright (C) 2026, Charles Chiou
+ */
+
+#include "zyxel/ZyxelFirewallCmd.hxx"
+#include <CppUTest/TestHarness.h>
+
+TEST_GROUP(ZyxelFirewallCmdTest) {
+    void setup() {}
+    void teardown() {}
+};
+
+TEST(ZyxelFirewallCmdTest, CommandGeneratorsReturnExpectedStrings) {
+    STRCMP_EQUAL("show secure-policy", ZyxelFirewallCmd::cmdShowSecurePolicy().c_str());
+    STRCMP_EQUAL("show secure-policy 11", ZyxelFirewallCmd::cmdShowSecurePolicy("11").c_str());
+    STRCMP_EQUAL("no secure-policy 1", ZyxelFirewallCmd::cmdDeleteRule("1").c_str());
+    STRCMP_EQUAL("no secure-policy NETMON_RULE_1", ZyxelFirewallCmd::cmdDeleteRule("NETMON_RULE_1").c_str());
+
+    // Fast deny sequence
+    auto fastDeny = ZyxelFirewallCmd::cmdInsertFastDeny(1, "NETMON_RULE_192_0_2_55",
+                                                       "NETMON_BLK_192_0_2_55",
+                                                       "Excessive WAN requests");
+    LONGS_EQUAL(6, fastDeny.size());
+    STRCMP_EQUAL("secure-policy insert 1", fastDeny[0].c_str());
+    STRCMP_EQUAL("description NETMON_RULE_192_0_2_55", fastDeny[1].c_str());
+    STRCMP_EQUAL("action deny", fastDeny[2].c_str());
+    STRCMP_EQUAL("sourceip NETMON_BLK_192_0_2_55", fastDeny[3].c_str());
+    STRCMP_EQUAL("activate", fastDeny[4].c_str());
+    STRCMP_EQUAL("exit", fastDeny[5].c_str());
+
+    // General rule insertion sequence
+    ZyxelFirewallRule rule;
+    rule.name = "CustomRule";
+    rule.description = "Test description";
+    rule.fromZone = "WAN";
+    rule.toZone = "LAN";
+    rule.sourceIp = "HostA";
+    rule.destinationIp = "HostB";
+    rule.service = "HTTP";
+    rule.action = "allow";
+    rule.active = true;
+
+    auto fullSeq = ZyxelFirewallCmd::cmdInsertRule(2, rule);
+    LONGS_EQUAL(11, fullSeq.size());
+    STRCMP_EQUAL("secure-policy insert 2", fullSeq[0].c_str());
+    STRCMP_EQUAL("name CustomRule", fullSeq[1].c_str());
+    STRCMP_EQUAL("description Test description", fullSeq[2].c_str());
+    STRCMP_EQUAL("from WAN", fullSeq[3].c_str());
+    STRCMP_EQUAL("to LAN", fullSeq[4].c_str());
+    STRCMP_EQUAL("sourceip HostA", fullSeq[5].c_str());
+    STRCMP_EQUAL("destinationip HostB", fullSeq[6].c_str());
+    STRCMP_EQUAL("service HTTP", fullSeq[7].c_str());
+    STRCMP_EQUAL("action allow", fullSeq[8].c_str());
+    STRCMP_EQUAL("activate", fullSeq[9].c_str());
+    STRCMP_EQUAL("exit", fullSeq[10].c_str());
+}
+
+TEST(ZyxelFirewallCmdTest, ParseSecurePolicyManualPage225Transcript) {
+    // Official transcript from manual page 225
+    std::string raw =
+        "secure-policy rule: 11\n"
+        "  name: WAN_to_Device\n"
+        "  description: Default allow rule\n"
+        "  user: any, schedule: none\n"
+        "  from: WAN, to: ZyWALL\n"
+        "  source IP: any, source port: any\n"
+        "  destination IP: any, service: Default_Allow_WAN_To_ZyWALL\n"
+        "  log: no, action: allow, status: yes\n"
+        "  connection match: no\n";
+
+    std::vector<ZyxelFirewallRule> rules;
+    CHECK_TRUE(ZyxelFirewallCmd::parseSecurePolicy(raw, rules));
+    LONGS_EQUAL(1, rules.size());
+
+    LONGS_EQUAL(11, rules[0].index);
+    STRCMP_EQUAL("WAN_to_Device", rules[0].name.c_str());
+    STRCMP_EQUAL("Default allow rule", rules[0].description.c_str());
+    STRCMP_EQUAL("WAN", rules[0].fromZone.c_str());
+    STRCMP_EQUAL("ZyWALL", rules[0].toZone.c_str());
+    STRCMP_EQUAL("any", rules[0].sourceIp.c_str());
+    STRCMP_EQUAL("any", rules[0].destinationIp.c_str());
+    STRCMP_EQUAL("Default_Allow_WAN_To_ZyWALL", rules[0].service.c_str());
+    STRCMP_EQUAL("allow", rules[0].action.c_str());
+    CHECK_TRUE(rules[0].active);
+}
+
+TEST(ZyxelFirewallCmdTest, ParseSecurePolicyTableFormat) {
+    std::string raw =
+        "Rule  Name             From   To      Source     Destination  Service   Action  Status\n"
+        "====================================================================================\n"
+        "1     NETMON_RULE_1    any    any     NETMON_1   any          any       deny    yes\n"
+        "11    WAN_to_Device    WAN    ZyWALL  any        any          Default   allow   yes\n";
+
+    std::vector<ZyxelFirewallRule> rules;
+    CHECK_TRUE(ZyxelFirewallCmd::parseSecurePolicy(raw, rules));
+    LONGS_EQUAL(2, rules.size());
+
+    LONGS_EQUAL(1, rules[0].index);
+    STRCMP_EQUAL("NETMON_RULE_1", rules[0].name.c_str());
+    STRCMP_EQUAL("any", rules[0].fromZone.c_str());
+    STRCMP_EQUAL("deny", rules[0].action.c_str());
+    CHECK_TRUE(rules[0].active);
+
+    LONGS_EQUAL(11, rules[1].index);
+    STRCMP_EQUAL("WAN_to_Device", rules[1].name.c_str());
+    STRCMP_EQUAL("allow", rules[1].action.c_str());
+}
+
+TEST(ZyxelFirewallCmdTest, ParseSecurePolicyTableWithSpacesInRuleName) {
+    std::string raw =
+        "Rule  Name                     From   To      Source     Destination  Service   Action  Status\n"
+        "==============================================================================================\n"
+        "1     Default LAN Rule with Sp LAN    WAN     any        any          any       allow   yes\n"
+        "2     Drop Inbound Traffic     WAN    LAN     any        any          any       deny    yes\n";
+
+    std::vector<ZyxelFirewallRule> rules;
+    CHECK_TRUE(ZyxelFirewallCmd::parseSecurePolicy(raw, rules));
+    LONGS_EQUAL(2, rules.size());
+
+    LONGS_EQUAL(1, rules[0].index);
+    STRCMP_EQUAL("Default LAN Rule with Sp", rules[0].name.c_str());
+    STRCMP_EQUAL("LAN", rules[0].fromZone.c_str());
+    STRCMP_EQUAL("WAN", rules[0].toZone.c_str());
+    STRCMP_EQUAL("allow", rules[0].action.c_str());
+
+    LONGS_EQUAL(2, rules[1].index);
+    STRCMP_EQUAL("Drop Inbound Traffic", rules[1].name.c_str());
+    STRCMP_EQUAL("WAN", rules[1].fromZone.c_str());
+    STRCMP_EQUAL("LAN", rules[1].toZone.c_str());
+    STRCMP_EQUAL("deny", rules[1].action.c_str());
+}
+
+TEST(ZyxelFirewallCmdTest, ParseErrorsOnCorruptedBuffers) {
+    std::vector<ZyxelFirewallRule> rules;
+    CHECK_FALSE(ZyxelFirewallCmd::parseSecurePolicy("Random garbage % syntax error", rules));
+    CHECK_FALSE(ZyxelFirewallCmd::parseSecurePolicy("No policy configured", rules));
+}
+
+/*
+ * Local variables:
+ * mode: C++
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * tab-width: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

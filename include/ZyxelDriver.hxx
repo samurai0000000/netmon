@@ -50,6 +50,9 @@ public:
     virtual nlohmann::json blockIp(const std::string &ip, const std::string &reason) override;
     virtual nlohmann::json unblockIp(const std::string &ip) override;
 
+    nlohmann::json ping(const std::string &target, int count = 4);
+    nlohmann::json traceroute(const std::string &target);
+
     bool isConfigured() const;
     bool isConnected() const;
 
@@ -66,6 +69,7 @@ public:
     bool replayJournal();
     void flushFlashWrite();
     void clearAuthFailure();
+    void cancelActiveCommand();
 
     // Testing and isolation helpers
     void resetForTesting();
