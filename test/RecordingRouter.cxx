@@ -82,6 +82,10 @@ bool ZyxelDriver::isConfigured() const {
     return _configured;
 }
 
+bool ZyxelDriver::isConnected() const {
+    return true;
+}
+
 nlohmann::json ZyxelDriver::getStatus() {
     return RecordingRouter::getInstance().getStatus();
 }

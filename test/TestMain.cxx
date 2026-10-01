@@ -28,6 +28,7 @@
 #include "SyslogServer.hxx"
 #include "AuthManager.hxx"
 #include "RecordingRouter.hxx"
+#include "NcursesConsole.hxx"
 
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/MemoryLeakWarningPlugin.h>
@@ -77,6 +78,7 @@ int main(int argc, char **argv) {
     SyslogServer::getInstance();
     AuthManager::getInstance();
     RecordingRouter::getInstance();
+    NcursesConsole::getInstance();
 
     {
         httplib::Server warmupServer;

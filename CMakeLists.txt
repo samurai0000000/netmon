@@ -48,6 +48,7 @@ configure_file(
 
 # Dependencies
 find_package(Threads REQUIRED)
+find_package(Curses REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(CONFIGPP REQUIRED libconfig++)
 pkg_check_modules(PCAP REQUIRED libpcap)
@@ -80,6 +81,7 @@ set(SOURCES
     src/AuthManager.cxx
     src/SyslogServer.cxx
     src/InstanceLock.cxx
+    src/NcursesConsole.cxx
     src/zyxel/ZyxelScanner.cxx
     src/zyxel/ZyxelSystemCmd.cxx
     src/zyxel/ZyxelNetworkCmd.cxx
@@ -95,6 +97,7 @@ target_include_directories(netmon PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cpp-httplib
+    ${CURSES_INCLUDE_DIRS}
     ${CONFIGPP_INCLUDE_DIRS}
     ${PCAP_INCLUDE_DIRS}
     ${NETSNMP_INCLUDE_DIRS}
@@ -105,6 +108,7 @@ target_include_directories(netmon PRIVATE
 
 target_link_libraries(netmon PRIVATE
     Threads::Threads
+    ${CURSES_LIBRARIES}
     ${CONFIGPP_LIBRARIES}
     ${PCAP_LIBRARIES}
     ${NETSNMP_LIBRARIES}
@@ -142,6 +146,7 @@ set(TEST_SOURCES
     test/TestAuditTrail.cxx
     test/TestSyslogIngest.cxx
     test/TestInstanceLock.cxx
+    test/TestNcursesConsole.cxx
     src/AuthManager.cxx
     src/WebServer.cxx
     src/Config.cxx
@@ -159,6 +164,7 @@ set(TEST_SOURCES
     src/SyslogServer.cxx
     src/ZyxelSshClient.cxx
     src/InstanceLock.cxx
+    src/NcursesConsole.cxx
 )
 
 add_executable(test_netmon_suite ${TEST_SOURCES})
@@ -169,6 +175,7 @@ target_include_directories(test_netmon_suite PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/test
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cpp-httplib
+    ${CURSES_INCLUDE_DIRS}
     ${CONFIGPP_INCLUDE_DIRS}
     ${PCAP_INCLUDE_DIRS}
     ${NETSNMP_INCLUDE_DIRS}
@@ -180,6 +187,7 @@ target_include_directories(test_netmon_suite PRIVATE
 
 target_link_libraries(test_netmon_suite PRIVATE
     Threads::Threads
+    ${CURSES_LIBRARIES}
     ${CONFIGPP_LIBRARIES}
     ${PCAP_LIBRARIES}
     ${NETSNMP_LIBRARIES}

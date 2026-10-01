@@ -24,16 +24,26 @@
 #include "AuthManager.hxx"
 #include "SyslogServer.hxx"
 #include "InstanceLock.hxx"
+#include "NcursesConsole.hxx"
 #include <libssh2.h>
 
 static volatile sig_atomic_t g_shutdownRequested = 0;
 
 static void signalHandler(int sig) {
-    if (sig == SIGINT && NetMonShell::getInstance().isExecutingCommand()) {
-        NetMonShell::getInstance().cancelCurrentCommand();
-        return;
+    if (sig == SIGINT) {
+        if (NetMonShell::getInstance().isExecutingCommand()) {
+            NetMonShell::getInstance().cancelCurrentCommand();
+            return;
+        }
+        if (NcursesConsole::getInstance().isRunning()) {
+            // Interactive ncurses console handles Ctrl+C internally (clears line)
+            return;
+        }
     }
     g_shutdownRequested = 1;
+    if (NcursesConsole::getInstance().isRunning()) {
+        NcursesConsole::getInstance().shutdown();
+    }
     WebServer::getInstance().stop();
     SnmpAggregator::getInstance().stop();
     NetMonShell::getInstance().stop();
@@ -247,6 +257,18 @@ int main(int argc, char **argv) {
     // Initialize SQLite time-series telemetry database
     SnmpDatabase::getInstance().open();
 
+    // In interactive daemon mode, initialize NcursesConsole before background threads
+    // start so that all daemon logs route cleanly to the upper server log pane.
+    bool useNcurses = (mode == "daemon" && isatty(STDIN_FILENO));
+    if (useNcurses) {
+        NcursesConsole::getInstance().setShutdownCallback([]() {
+            signalHandler(SIGTERM);
+        });
+        if (!NcursesConsole::getInstance().init()) {
+            useNcurses = false;
+        }
+    }
+
     // Start streaming sniffer and telemetry
     LanSniffer::getInstance().start();
 
@@ -273,8 +295,10 @@ int main(int argc, char **argv) {
     AimonGatewayClient::getInstance().setWebPort(WebServer::getInstance().getPort());
     AimonGatewayClient::getInstance().start();
 
-    if (mode == "daemon") {
-        // Interactive shell mode for persistent GNU screen session
+    if (useNcurses) {
+        NcursesConsole::getInstance().run();
+        NcursesConsole::getInstance().shutdown();
+    } else if (mode == "daemon") {
         NetMonShell::getInstance().runInteractive();
     } else {
         // Non-interactive background daemon

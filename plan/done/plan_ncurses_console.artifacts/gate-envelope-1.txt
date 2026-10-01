@@ -1,0 +1,33 @@
+=== NetMon Ncurses Split-Pane Console Qualification Evidence ===
+Date: 2026-10-01
+Author: Charles Chiou
+Policy: selfso
+
+1. Build Output:
+   - Target: netmon, test_netmon_suite
+   - Curses linkage: /usr/lib/x86_64-linux-gnu/libcurses.so
+   - Capability helper: [setcap_netmon] Successfully applied cap_net_raw=eip to build/netmon
+   - Status: Clean build, 0 warnings
+
+2. CppUTest Qualification Suite (test_netmon_suite -v):
+   - TEST(NcursesStreamBufTest, ColorPairConstantsDefined) - PASSED
+   - TEST(NcursesConsoleGeometry, Standard80x24BudgetingCalculation) - PASSED
+   - TEST(NcursesWordWrap, MinimumBoundaryHandling) - PASSED
+   - TEST(NcursesWordWrap, MultilinePreservesEmptyLinesAndCarriageReturns) - PASSED
+   - TEST(NcursesWordWrap, UnbrokenLongTokenSplitsGracefully) - PASSED
+   - TEST(NcursesWordWrap, WordBoundaryWrapAndIndentation) - PASSED
+   - TEST(NcursesWordWrap, ExactLengthBoundary) - PASSED
+   - TEST(NcursesWordWrap, ShortTextFitsInSingleLine) - PASSED
+   - Total Suite Status: OK (65 tests, 65 ran, 447 checks, 0 failures, 0 memory leaks)
+
+3. Regression Suites:
+   - test_zyxel_driver_suite: OK (89 tests, 89 ran, 560 checks, 0 failures)
+   - test_zyxel_parsers_fuzz: RapidCheck passed 10 property suites (1,000 tests)
+
+4. Headless Non-Interactive Preflight:
+   - ./build/netmon --help: Exited code 0
+   - ./build/netmon status: Exited code 0, printed 143 online devices with PCAP preflight check
+
+5. Pre-Commit Compliance:
+   - Command: python3 ../intelligence/scripts/check_compliance.py --policy selfso --staged
+   - Status: All compliance checks passed cleanly!
