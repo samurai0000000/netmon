@@ -1,0 +1,11 @@
+project: netmon
+envelope: envelope-5
+language: c++
+risk: regression
+red_command: make test
+red_result: fail
+green_command: make test
+green_result: pass
+sanitizer_command: not applicable: regression risk
+rapidcheck: used
+other_isa: not applicable: single-ISA x86_64 host

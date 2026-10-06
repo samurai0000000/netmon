@@ -1,0 +1,32 @@
+Gate Artifact: Envelope 2 - Secured netmon-ai-client Daemon & IPC Implementation
+Timestamp: 2026-10-05T15:41:00+08:00
+Status: PASSED
+
+1. Verification Suite:
+   - Target: test_netmon_suite
+   - Result: 118 tests ran, 118 passed, 814 checks passed, 0 failures, 0 errors.
+   - Target: test_zyxel_driver_suite
+   - Result: 89 tests ran, 89 passed, 564 checks passed, 0 failures, 0 errors.
+   - Target: test_zyxel_parsers_fuzz (RapidCheck)
+   - Result: 10 property suites, 1,000 checks passed.
+
+2. Qualified Deliverables:
+   - client/netmon-ai-client.c:
+     * Daemon auto-spawn on demand (/tmp/netmon-ai-<anchor>.sock)
+     * Anchor resolution from /proc/<ppid>/stat field 4
+     * SO_PEERCRED kernel credential checking (uid == getuid(), caller ancestry)
+     * Monotonic 5-minute (300s) idle timeout sending CLOSE
+     * Subcommand argument validation: request, status, cancel, close require argc==2; do requires argc>=3
+     * Multi-command sequential execution on single connection
+     * Clean disconnect and socket unlinking on CLOSE
+   - src/AimonGatewayClient.cxx:
+     * netmon-ai-client.c payload delivery
+     * compiler_argv updated
+     * procedure documentation updated
+     * sha256 dynamically hashed
+   - CMakeLists.txt:
+     * C language enabled
+     * netmon-ai-client executable target added
+     * test_netmon_suite dependency on netmon-ai-client
+   - client/netmon-clearance-client.c:
+     * Obsolete file removed
