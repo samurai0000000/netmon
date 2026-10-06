@@ -78,6 +78,9 @@ public:
     const std::string &getDatabaseFile() const;
     void setDatabaseFile(const std::string &file);
 
+    const std::string &getAuditFile() const;
+    void setAuditFile(const std::string &file);
+
     int getRawRetentionDays() const;
     void setRawRetentionDays(int days);
 
@@ -130,6 +133,7 @@ private:
     int         _snmpPollIntervalSec;
     std::vector<SnmpTargetConfig> _snmpTargets;
     std::string _databaseFile;
+    std::string _auditFile;
     int         _rawRetentionDays;
     WebConfig   _webConfig;
 };

@@ -542,6 +542,18 @@ body {
     color: var(--accent-emerald);
 }
 
+.text-danger {
+    color: #f87171;
+}
+
+.text-warning {
+    color: var(--accent-amber);
+}
+
+.text-muted {
+    color: var(--text-muted);
+}
+
 /* Protocol Bar */
 .protocol-bar {
     height: 12px;

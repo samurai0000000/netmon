@@ -31,6 +31,7 @@ public:
     static std::string cmdAddService(const std::string &name, const std::string &proto, int port);
     static std::string cmdDeleteService(const std::string &name);
     static std::string cmdShowServiceObjects(const std::string &name = "");
+    static std::string cmdShowServiceGroup(const std::string &name = "");
 
     // Parsers
     static bool parseAddressObjects(const std::string &raw, std::vector<ZyxelAddressObject> &out);

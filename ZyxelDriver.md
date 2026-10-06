@@ -276,7 +276,8 @@ The driver implementation, grammar definitions, table delimiters, and PTY stream
 | `cmdDeleteService(name)` | `no service-object <name>` | Deletes a service object. |
 | `cmdShowServiceObjects()` | `show service-object` | Parses all configured service objects into `std::vector<ZyxelServiceObject>`. |
 | `cmdAddAddressGroupMember(grp, mem)` | `address-group <grp> add <mem>` | Adds address object to composite security group. |
-| `cmdShowAddressGroups()` | `show address-group` | Parses address groups and member lists into `std::vector<ZyxelAddressGroup>`. |
+| `cmdShowAddressGroup(name)` | `show object-group address` | Generates ZySH command to query address object groups. |
+| `cmdShowServiceGroup(name)` | `show object-group service` | Generates ZySH command to query service object groups. |
 
 ### 4.4 Firewall Security Policy (`ZyxelFirewallCmd`)
 

@@ -29,6 +29,7 @@
 #include "AuthManager.hxx"
 #include "RecordingRouter.hxx"
 #include "NcursesConsole.hxx"
+#include "AiSecurityClearance.hxx"
 
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/MemoryLeakWarningPlugin.h>
@@ -79,6 +80,7 @@ int main(int argc, char **argv) {
     AuthManager::getInstance();
     RecordingRouter::getInstance();
     NcursesConsole::getInstance();
+    AiSecurityClearanceManager::getInstance();
 
     {
         httplib::Server warmupServer;

@@ -48,9 +48,9 @@ std::string ZyxelObjectCmd::cmdDeleteAddressGroupMember(const std::string &group
 
 std::string ZyxelObjectCmd::cmdShowAddressGroup(const std::string &name) {
     if (name.empty()) {
-        return "show address-group";
+        return "show object-group address";
     }
-    return "show address-group " + name;
+    return "show object-group address " + name;
 }
 
 std::string ZyxelObjectCmd::cmdAddService(const std::string &name, const std::string &proto, int port) {
@@ -66,6 +66,13 @@ std::string ZyxelObjectCmd::cmdShowServiceObjects(const std::string &name) {
         return "show service-object";
     }
     return "show service-object " + name;
+}
+
+std::string ZyxelObjectCmd::cmdShowServiceGroup(const std::string &name) {
+    if (name.empty()) {
+        return "show object-group service";
+    }
+    return "show object-group service " + name;
 }
 
 bool ZyxelObjectCmd::parseAddressObjects(const std::string &raw,

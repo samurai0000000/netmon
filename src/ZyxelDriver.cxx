@@ -14,6 +14,7 @@
 #include "zyxel/ZyxelObjectCmd.hxx"
 #include "zyxel/ZyxelFirewallCmd.hxx"
 #include "zyxel/ZyxelNatCmd.hxx"
+#include "zyxel/ZyxelSecurityCmd.hxx"
 
 #include <iostream>
 #include <fstream>
@@ -214,6 +215,10 @@ void ZyxelDriver::resetForTesting() {
         std::lock_guard<std::mutex> dlock(_dryRunMutex);
         _dryRunLog.clear();
         _dryRunLog.shrink_to_fit();
+    }
+    {
+        std::lock_guard<std::mutex> tlock(_telemetryMutex);
+        _securityTelemetry = ZyxelSecurityTelemetry();
     }
 }
 
@@ -555,6 +560,39 @@ void ZyxelDriver::cancelActiveCommand() {
     _sshClient.cancelActiveCommand();
 }
 
+SshResult ZyxelDriver::executeClearanceCommand(const std::string &command,
+                                              std::string &outputOut,
+                                              std::string &matchedPromptOut,
+                                              int timeoutMs) {
+    if (isDryRun()) {
+        logDryRunCommand(command);
+        outputOut = "[dry-run] " + command;
+        matchedPromptOut = "#";
+        return SshResult::SUCCESS;
+    }
+    std::lock_guard<std::mutex> driverLock(_driverMutex);
+    SshResult res = _sshClient.executeCommand(command, outputOut, timeoutMs);
+    matchedPromptOut = _sshClient.getLastMatchedPrompt();
+    return res;
+}
+
+SshResult ZyxelDriver::unwindToRootPrompt() {
+    if (isDryRun()) {
+        logDryRunCommand("unwindToRootPrompt");
+        return SshResult::SUCCESS;
+    }
+    std::lock_guard<std::mutex> driverLock(_driverMutex);
+    return _sshClient.unwindToRootPrompt();
+}
+
+std::string ZyxelDriver::getLastMatchedPrompt() const {
+    if (isDryRun()) {
+        return "#";
+    }
+    std::lock_guard<std::mutex> driverLock(_driverMutex);
+    return _sshClient.getLastMatchedPrompt();
+}
+
 nlohmann::json ZyxelDriver::blockIp(const std::string &ip, const std::string &reason) {
     nlohmann::json res;
 
@@ -832,8 +870,20 @@ nlohmann::json ZyxelDriver::unblockIp(const std::string &ip) {
 }
 
 nlohmann::json ZyxelDriver::getStatus() {
+    std::unique_lock<std::mutex> lock(_driverMutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        if (!_cachedStatus.empty()) {
+            return _cachedStatus;
+        }
+        nlohmann::json busyRes;
+        busyRes["status"] = "online";
+        busyRes["driver"] = "ZyxelDriver (USG FLEX 200)";
+        busyRes["transport"] = "SSH-2.0 (libssh2)";
+        busyRes["busy"] = true;
+        return busyRes;
+    }
+
     nlohmann::json res;
-    std::lock_guard<std::mutex> lock(_driverMutex);
 
     if (!_configured) {
         res["status"] = "unconfigured";
@@ -855,6 +905,10 @@ nlohmann::json ZyxelDriver::getStatus() {
     ensureConnectedUnlocked();
 
     if (_sshClient.isConnected()) {
+        if (_cachedStatus.contains("model")) {
+            return _cachedStatus;
+        }
+
         res["status"] = "online";
         res["driver"] = "ZyxelDriver (USG FLEX 200)";
         res["transport"] = "SSH-2.0 (libssh2)";
@@ -882,8 +936,10 @@ nlohmann::json ZyxelDriver::getStatus() {
                     }
                 }
             }
+            _cachedStatus = res;
         }
     } else {
+        _cachedStatus.clear();
         SshClientState state = _sshClient.getState();
         if (state == SshClientState::DEGRADED_AUTH_FAILED) {
             res["status"] = "degraded";
@@ -940,8 +996,30 @@ nlohmann::json ZyxelDriver::getSessions() {
         res["active_sessions"] = sum.activeSessions;
         res["max_sessions"] = sum.maxSessions;
         res["session_usage_percent"] = sum.sessionUsagePercent;
+
+        std::lock_guard<std::mutex> tlock(_telemetryMutex);
+        _securityTelemetry.sessionSummary = sum;
+        _securityTelemetry.hasSessionSummary = true;
+        _securityTelemetry.timestamp = time(nullptr);
     }
     return res;
+}
+
+nlohmann::json ZyxelDriver::getSecurityMetrics() {
+    std::lock_guard<std::mutex> lock(_telemetryMutex);
+    nlohmann::json j = _securityTelemetry.toJson();
+    j["status"] = isConnected() ? "ok" : (_configured ? "offline" : "unconfigured");
+    return j;
+}
+
+ZyxelSecurityTelemetry ZyxelDriver::getSecurityTelemetry() const {
+    std::lock_guard<std::mutex> lock(_telemetryMutex);
+    return _securityTelemetry;
+}
+
+void ZyxelDriver::setSecurityTelemetryForTesting(const ZyxelSecurityTelemetry &telem) {
+    std::lock_guard<std::mutex> lock(_telemetryMutex);
+    _securityTelemetry = telem;
 }
 
 nlohmann::json ZyxelDriver::ping(const std::string &target, int count) {
@@ -1530,6 +1608,7 @@ void ZyxelDriver::debounceWorker() {
 }
 
 void ZyxelDriver::keepaliveWorker() {
+    uint32_t iteration = 0;
     while (_running) {
         for (int i = 0; i < 150 && _running; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1537,8 +1616,46 @@ void ZyxelDriver::keepaliveWorker() {
         if (!_running) {
             break;
         }
+
+        iteration++;
+
         if (_sshClient.isConnected()) {
             _sshClient.sendKeepalive();
+        }
+
+        // Every 60 seconds (4 iterations of 15 seconds), execute active telemetry queries
+        // to reset the ZLD CLI shell idle timeout and collect live security metrics.
+        if ((iteration % 4) == 0 && _sshClient.isConnected() && !isDryRun()) {
+            std::unique_lock<std::mutex> lock(_driverMutex, std::try_to_lock);
+            if (lock.owns_lock()) {
+                std::string curPrompt = _sshClient.getLastMatchedPrompt();
+                if (curPrompt.find('(') == std::string::npos) {
+                    ZyxelSecurityTelemetry telem;
+                    telem.timestamp = time(nullptr);
+                    std::string out;
+
+                    if (_sshClient.executeCommand(ZyxelSecurityCmd::cmdShowConnStatus(), out, 5000) == SshResult::SUCCESS) {
+                        if (ZyxelSecurityCmd::parseConnStatus(out, telem.sessionSummary)) {
+                            telem.hasSessionSummary = true;
+                        }
+                    }
+                    if (_sshClient.executeCommand(ZyxelSecurityCmd::cmdShowAppStatisticsSummary(), out, 5000) == SshResult::SUCCESS) {
+                        if (ZyxelSecurityCmd::parseAppStatisticsSummary(out, telem.appPatrolSummary)) {
+                            telem.hasAppPatrol = true;
+                        }
+                    }
+                    if (_sshClient.executeCommand(ZyxelSecurityCmd::cmdShowIdpStatisticsSummary(), out, 5000) == SshResult::SUCCESS) {
+                        if (ZyxelSecurityCmd::parseIdpStatisticsSummary(out, telem.idpSummary)) {
+                            telem.hasIdp = true;
+                        }
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> tlock(_telemetryMutex);
+                        _securityTelemetry = telem;
+                    }
+                }
+            }
         }
     }
 }

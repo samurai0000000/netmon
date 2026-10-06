@@ -18,6 +18,9 @@
 #include <thread>
 #include <memory>
 #include <curses.h>
+#ifdef OK
+#undef OK
+#endif
 
 class NcursesConsole;
 
@@ -47,7 +50,10 @@ public:
         PAIR_WARN = 4,
         PAIR_ERROR = 5,
         PAIR_TEXT = 6,
-        PAIR_MUTED = 7
+        PAIR_MUTED = 7,
+        PAIR_TIER_READ = 8,
+        PAIR_TIER_WRITE = 9,
+        PAIR_TIER_ELEVATED = 10
     };
 
     using ShutdownCallback = std::function<void()>;
@@ -70,7 +76,7 @@ public:
     void run();
 
     // Writes to main middle panel (Interactive Command Outputs)
-    void logOutput(const std::string &text, int colorPair = 0, bool isBold = false);
+    void logOutput(const std::string &text, int colorPair = 0, bool isBold = false, bool isBlink = false);
 
     // Writes to top log pane (Server stdout/stderr logs)
     void logServer(const std::string &text, int colorPair = 0);
@@ -98,6 +104,7 @@ private:
         std::string text;
         int colorPair = 0;
         bool isBold = false;
+        bool isBlink = false;
     };
     struct LogLine {
         std::string text;
@@ -113,7 +120,8 @@ private:
     void redrawInputLine();
     void renderMiddlePanel();
     void renderLogPanel();
-    void addOutputLine(const std::string &line, int colorPair = 0, bool isBold = false);
+    void addOutputLine(const std::string &line, int colorPair = 0, bool isBold = false, bool isBlink = false);
+    std::string promptPassword(const std::string &promptMsg);
 
     ShutdownCallback _shutdownCb;
 

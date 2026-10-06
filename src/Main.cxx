@@ -25,6 +25,7 @@
 #include "SyslogServer.hxx"
 #include "InstanceLock.hxx"
 #include "NcursesConsole.hxx"
+#include "AiSecurityClearance.hxx"
 #include <libssh2.h>
 
 static volatile sig_atomic_t g_shutdownRequested = 0;
@@ -49,6 +50,7 @@ static void signalHandler(int sig) {
     NetMonShell::getInstance().stop();
     LanSniffer::getInstance().stop();
     AimonGatewayClient::getInstance().stop();
+    AiSecurityClearanceManager::getInstance().stop();
     DnsResolver::getInstance().stop();
     MacVendorResolver::getInstance().stop();
 }
@@ -290,6 +292,11 @@ int main(int argc, char **argv) {
     ZyxelDriver::getInstance().start();
     AimonGatewayClient::getInstance().setRouterDriver(
         std::shared_ptr<RouterDriver>(&ZyxelDriver::getInstance(), [](RouterDriver *) {}));
+    WebServer::getInstance().setRouterDriver(
+        std::shared_ptr<RouterDriver>(&ZyxelDriver::getInstance(), [](RouterDriver *) {}));
+
+    // Start AI security clearance TCP listener (Section 5)
+    AiSecurityClearanceManager::getInstance().start("0.0.0.0", 3885);
 
     // Start gateway client to aimon hub
     AimonGatewayClient::getInstance().setWebPort(WebServer::getInstance().getPort());
@@ -314,6 +321,7 @@ int main(int argc, char **argv) {
     SnmpAggregator::getInstance().stop();
     LanSniffer::getInstance().stop();
     AimonGatewayClient::getInstance().stop();
+    AiSecurityClearanceManager::getInstance().stop();
     DnsResolver::getInstance().stop();
     MacVendorResolver::getInstance().stop();
     ZyxelDriver::getInstance().stop();

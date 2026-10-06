@@ -55,8 +55,10 @@ private:
     std::string toolLanGetTrafficSummary();
     std::string toolFirewallGetStatus();
     std::string toolFirewallGetSessions();
+    std::string toolFirewallGetMetrics();
     std::string toolFirewallBlockIp(const std::string &ip, const std::string &reason);
     std::string toolFirewallUnblockIp(const std::string &ip);
+    std::string toolNetmonGetClearanceClient();
     std::string toolSnmpGetDeviceMetrics(const std::string &targetIp, const std::string &filter);
     std::string toolSnmpGetWanStatus(const std::string &targetIp);
     std::string toolSnmpGetInterfaceCounters(const std::string &targetIp, const std::string &ifName);

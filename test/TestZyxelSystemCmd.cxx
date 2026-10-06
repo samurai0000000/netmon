@@ -115,6 +115,17 @@ TEST(ZyxelSystemCmdTest, ParseConnStatusStandardAndSlashFormat) {
     LONGS_EQUAL(250, sum2.activeSessions);
     LONGS_EQUAL(50000, sum2.maxSessions);
     DOUBLES_EQUAL(0.5, sum2.sessionUsagePercent, 0.01);
+
+    std::string raw3 =
+        "Active Session Number: 1319\n"
+        "Optimized DPI Session Number: 600000\n"
+        "Support Session Number: 600000\n"
+        "Router> \n";
+    ZyxelSessionSummary sum3;
+    CHECK_TRUE(ZyxelSystemCmd::parseConnStatus(raw3, sum3));
+    LONGS_EQUAL(1319, sum3.activeSessions);
+    LONGS_EQUAL(600000, sum3.maxSessions);
+    DOUBLES_EQUAL(0.2198, sum3.sessionUsagePercent, 0.001);
 }
 
 TEST(ZyxelSystemCmdTest, ParsePingTranscript) {

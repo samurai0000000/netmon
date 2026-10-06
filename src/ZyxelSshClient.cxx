@@ -274,8 +274,11 @@ SshResult ZyxelSshClient::connect(const std::string &password) {
         return SshResult::ERR_CHANNEL_FAILED;
     }
 
-    // Request 256-column PTY to avoid line wrapping
-    rc = libssh2_channel_request_pty_ex(_channel, "vt100", 5, nullptr, 0, 256, 24, 0, 0);
+    // Request 256-column PTY with max height (65535 rows) to avoid line wrapping and paging
+    rc = libssh2_channel_request_pty_ex(_channel, "vt100", 5, nullptr, 0, 256, 65535, 0, 0);
+    if (rc != 0) {
+        rc = libssh2_channel_request_pty_ex(_channel, "vt100", 5, nullptr, 0, 256, 24, 0, 0);
+    }
     if (rc != 0) {
         disconnect();
         _state = SshClientState::ERROR_DISCONNECTED;
@@ -537,8 +540,37 @@ SshResult ZyxelSshClient::drainUntilPromptWithReader(
             rawBuffer.append(chunk, n);
 
             // Handle --More-- pagination prompt by sending space to advance
-            if (rawBuffer.find("--More--") != std::string::npos && writer) {
-                writer(" ", 1);
+            while (true) {
+                size_t morePos = rawBuffer.find("--More--");
+                if (morePos == std::string::npos) {
+                    break;
+                }
+                size_t startPos = morePos;
+                if (startPos > 0 && rawBuffer[startPos - 1] == '\r') {
+                    startPos--;
+                }
+                if (startPos >= 4 && rawBuffer[startPos - 4] == '\x1b' && rawBuffer[startPos - 3] == '[') {
+                    startPos -= 4;
+                } else if (startPos >= 3 && rawBuffer[startPos - 3] == '\x1b' && rawBuffer[startPos - 2] == '[') {
+                    startPos -= 3;
+                }
+                size_t endPos = morePos + 8;
+                if (endPos + 2 < rawBuffer.size() && rawBuffer[endPos] == '\x1b' && rawBuffer[endPos + 1] == '[') {
+                    size_t k = endPos + 2;
+                    while (k < rawBuffer.size() && k < endPos + 8 && (rawBuffer[k] == '?' || (rawBuffer[k] >= '0' && rawBuffer[k] <= '9') || rawBuffer[k] == ';')) {
+                        k++;
+                    }
+                    if (k < rawBuffer.size()) {
+                        endPos = k + 1;
+                    }
+                }
+                while (endPos < rawBuffer.size() && (rawBuffer[endPos] == '\r' || rawBuffer[endPos] == '\b' || rawBuffer[endPos] == ' ')) {
+                    endPos++;
+                }
+                rawBuffer.erase(startPos, endPos - startPos);
+                if (writer) {
+                    writer(" ", 1);
+                }
             }
 
             std::string prompt;
@@ -673,6 +705,11 @@ SshResult ZyxelSshClient::unwindToRootPromptUnlocked(int maxAttempts) {
 SshResult ZyxelSshClient::unwindToRootPrompt(int maxAttempts) {
     std::lock_guard<std::mutex> lock(_sshMutex);
     return unwindToRootPromptUnlocked(maxAttempts);
+}
+
+std::string ZyxelSshClient::getLastMatchedPrompt() const {
+    std::lock_guard<std::mutex> lock(_sshMutex);
+    return _lastMatchedPrompt;
 }
 
 bool ZyxelSshClient::sendKeepalive() {

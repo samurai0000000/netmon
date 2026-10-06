@@ -303,6 +303,60 @@ struct ZyxelDiagnosticResult {
     }
 };
 
+struct ZyxelAppPatrolSummary {
+    uint64_t forwardedKb = 0;
+    uint64_t droppedKb = 0;
+    uint64_t rejectedKb = 0;
+    uint64_t matchedConnections = 0;
+
+    nlohmann::json toJson() const {
+        return {
+            {"forwarded_kb", forwardedKb},
+            {"dropped_kb", droppedKb},
+            {"rejected_kb", rejectedKb},
+            {"matched_connections", matchedConnections}
+        };
+    }
+};
+
+struct ZyxelIdpSummary {
+    bool     enabled = false;
+    uint64_t threatsDetected = 0;
+    uint64_t packetsDropped = 0;
+    uint64_t connectionsReset = 0;
+
+    nlohmann::json toJson() const {
+        return {
+            {"enabled", enabled},
+            {"threats_detected", threatsDetected},
+            {"packets_dropped", packetsDropped},
+            {"connections_reset", connectionsReset}
+        };
+    }
+};
+
+struct ZyxelSecurityTelemetry {
+    time_t                timestamp = 0;
+    ZyxelSessionSummary   sessionSummary;
+    ZyxelAppPatrolSummary appPatrolSummary;
+    ZyxelIdpSummary       idpSummary;
+    bool                  hasSessionSummary = false;
+    bool                  hasAppPatrol = false;
+    bool                  hasIdp = false;
+
+    nlohmann::json toJson() const {
+        return {
+            {"timestamp", timestamp},
+            {"sessions", sessionSummary.toJson()},
+            {"app_patrol", appPatrolSummary.toJson()},
+            {"idp", idpSummary.toJson()},
+            {"has_session_summary", hasSessionSummary},
+            {"has_app_patrol", hasAppPatrol},
+            {"has_idp", hasIdp}
+        };
+    }
+};
+
 #endif /* NETMON_ZYXEL_TYPES_HXX */
 
 /*

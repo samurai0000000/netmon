@@ -35,6 +35,8 @@ public:
     int  getPort() const;
     int  getAdminPort() const;
 
+    void setRouterDriver(std::shared_ptr<class RouterDriver> driver);
+
 private:
     WebServer();
     ~WebServer();
@@ -67,6 +69,8 @@ private:
 
     mutable std::mutex               _sessionMutex;
     std::map<std::string, time_t>    _uiSessions;
+
+    std::shared_ptr<class RouterDriver> _routerDriver;
 };
 
 #endif /* NETMON_WEBSERVER_HXX */

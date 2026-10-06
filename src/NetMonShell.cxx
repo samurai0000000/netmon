@@ -10,9 +10,9 @@
 #include "DeviceRegistry.hxx"
 #include "AimonGatewayClient.hxx"
 #include "AuthManager.hxx"
-#include "SecurityCheckpoint.hxx"
-#include "SnmpDatabase.hxx"
 #include "ZyxelDriver.hxx"
+#include "AiSecurityClearance.hxx"
+#include "UnixAuth.hxx"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -20,8 +20,19 @@
 #include <ctime>
 #include <unistd.h>
 #include <termios.h>
+#include <mutex>
+
+static std::mutex g_pwMutex;
+static NetMonShell::PasswordReaderFunc g_pwReaderForTesting = nullptr;
 
 static std::string readPasswordInteractive(const std::string &prompt) {
+    {
+        std::lock_guard<std::mutex> lock(g_pwMutex);
+        if (g_pwReaderForTesting) {
+            return g_pwReaderForTesting(prompt);
+        }
+    }
+
     std::cout << prompt << std::flush;
     std::string password;
 
@@ -44,6 +55,11 @@ static std::string readPasswordInteractive(const std::string &prompt) {
         password.pop_back();
     }
     return password;
+}
+
+void NetMonShell::setPasswordReaderForTesting(PasswordReaderFunc reader) {
+    std::lock_guard<std::mutex> lock(g_pwMutex);
+    g_pwReaderForTesting = reader;
 }
 
 NetMonShell &NetMonShell::getInstance() {
@@ -121,13 +137,10 @@ void NetMonShell::printHelp() const {
     std::cout << "  router traceroute <host>     Run router-side route trace" << std::endl;
     std::cout << "  router set-password          Store router password interactively in encrypted vault" << std::endl;
     std::cout << "  router clear-password        Clear router password from encrypted vault" << std::endl;
-    std::cout << "  policy [mode]                View or update policy (disabled, dry_run, require_approval, live)" << std::endl;
-    std::cout << "  pending                      List actions awaiting operator approval" << std::endl;
-    std::cout << "  approve <id>                 Approve and execute a pending action" << std::endl;
-    std::cout << "  deny <id> [reason]           Deny a pending action" << std::endl;
-    std::cout << "  reconcile <id> <appl|retry>  Reconcile an interrupted action" << std::endl;
-    std::cout << "  audit [limit]                View recent audit outbox decisions" << std::endl;
-    std::cout << "  syslog [limit]               View recent router syslog events" << std::endl;
+    std::cout << "  auth list                    List currently active AI security clearances and timers" << std::endl;
+    std::cout << "  audit [limit]                Show AI security clearance audit history" << std::endl;
+    std::cout << "  grant conn-nnnn [seconds] [read|write] / approve conn-nnnn Approve pending AI clearance request (default: indefinite for read, 300s for write; requires UNIX password for all approvals)" << std::endl;
+    std::cout << "  deny conn-nnnn [seconds]     Deny pending AI clearance request" << std::endl;
     std::cout << "  help                         Show this help message" << std::endl;
     std::cout << "  quit / exit                  Exit the shell" << std::endl;
 }
@@ -319,7 +332,15 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
         return 0;
     }
 
-    _executingCommand.store(true);
+    struct CommandExecutionGuard {
+        std::atomic<bool> &_flag;
+        CommandExecutionGuard(std::atomic<bool> &flag) : _flag(flag) {
+            _flag.store(true);
+        }
+        ~CommandExecutionGuard() {
+            _flag.store(false);
+        }
+    } guard(_executingCommand);
 
     if (cmd == "help" || cmd == "?") {
         printHelp();
@@ -346,7 +367,10 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
     } else if (cmd == "auth") {
         std::string subCmd;
         iss >> subCmd;
-        if (subCmd == "login") {
+        if (subCmd == "list") {
+            cmdAuthList();
+            return 0;
+        } else if (subCmd == "login") {
             std::string pass;
             iss >> pass;
             cmdAuthLogin(pass);
@@ -361,7 +385,7 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
             _sessionToken = AuthManager::getInstance().login(newPass);
             return 0;
         } else {
-            std::cout << "Usage: auth login <password> | auth set-password <current> <new>" << std::endl;
+            std::cout << "Usage: auth list | auth login <password> | auth set-password <current> <new>" << std::endl;
         }
     } else if (cmd == "router") {
         std::string subCmd;
@@ -395,47 +419,141 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
         } else {
             std::cout << "Usage: router status | router ping <host> [count] | router traceroute <host> | router set-password | router clear-password" << std::endl;
         }
-    } else if (cmd == "policy") {
-        std::string mode;
-        iss >> mode;
-        cmdPolicy(mode);
-    } else if (cmd == "pending") {
-        cmdPending();
-    } else if (cmd == "approve") {
-        int64_t id = 0;
-        iss >> id;
-        cmdApprove(id);
-    } else if (cmd == "deny") {
-        int64_t id = 0;
-        std::string reason;
-        iss >> id;
-        std::getline(iss, reason);
-        size_t first = reason.find_first_not_of(" \t");
-        if (first != std::string::npos) {
-            reason = reason.substr(first);
-        }
-        cmdDeny(id, reason);
-    } else if (cmd == "reconcile") {
-        int64_t id = 0;
-        std::string action;
-        iss >> id >> action;
-        cmdReconcile(id, action);
     } else if (cmd == "audit") {
-        size_t lim = 50;
-        iss >> lim;
-        cmdAudit(lim > 0 ? lim : 50);
-    } else if (cmd == "syslog") {
-        size_t lim = 50;
-        iss >> lim;
-        cmdSyslog(lim > 0 ? lim : 50);
+        size_t limit = 20;
+        if (iss >> limit) {
+            if (limit == 0) limit = 20;
+        } else {
+            limit = 20;
+        }
+        auto logs = AiSecurityClearanceManager::getInstance().getAuditLog(limit);
+        std::cout << "\n=== AI Security Clearance Audit Log (Recent " << logs.size() << ") ===" << std::endl;
+        if (logs.empty()) {
+            std::cout << "  (no audit entries recorded)" << std::endl;
+        } else {
+            for (const auto &e : logs) {
+                char timeBuf[32];
+                struct tm tmBuf;
+                localtime_r(&e.timestamp, &tmBuf);
+                strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tmBuf);
+                std::cout << "  [" << timeBuf << "] conn=" << AiSecurityClearanceManager::formatConnId(e.connectionId)
+                          << " peer=" << e.peerAddress << ":" << e.peerPort
+                          << " cmd=\"" << e.command << "\""
+                          << " decision=" << e.decision
+                          << " reason=\"" << e.reason << "\""
+                          << " ssh_res=" << e.sshResult
+                          << " (" << e.durationMs << "ms)" << std::endl;
+            }
+        }
+        std::cout << std::endl;
+        return 0;
+    } else if (cmd == "approve" || cmd == "grant") {
+        std::string targetStr;
+        iss >> targetStr;
+        uint64_t targetId = AiSecurityClearanceManager::parseConnId(targetStr);
+        uint32_t seconds = 300;
+        bool hasSeconds = false;
+        bool hasExplicitTier = false;
+        ClearanceTier tier = ClearanceTier::READ_WRITE;
+
+        std::string optArg;
+        while (iss >> optArg) {
+            if (optArg == "read" || optArg == "READ") {
+                tier = ClearanceTier::READ;
+                hasExplicitTier = true;
+            } else if (optArg == "write" || optArg == "WRITE" || optArg == "readwrite" || optArg == "read/write") {
+                tier = ClearanceTier::READ_WRITE;
+                hasExplicitTier = true;
+            } else if (optArg == "password" || optArg == "elevated") {
+                tier = ClearanceTier::READ_WRITE_PASSWORD;
+                hasExplicitTier = true;
+            } else {
+                try {
+                    seconds = std::stoul(optArg);
+                    hasSeconds = true;
+                } catch (...) {}
+            }
+        }
+
+        if (targetId == 0) {
+            std::cout << "Usage: grant conn-nnnn [seconds] [read|write]  (e.g., grant conn-0003 300)" << std::endl;
+            return 1;
+        }
+        uint64_t pendingId = 0;
+        std::string peerIp;
+        uint16_t peerPort = 0;
+        ClearanceTier requestedTier = ClearanceTier::READ_WRITE;
+        if (!AiSecurityClearanceManager::getInstance().hasPendingApproval(pendingId, peerIp, peerPort, &requestedTier) || pendingId != targetId) {
+            std::cout << "No pending clearance request for connection " << AiSecurityClearanceManager::formatConnId(targetId) << "." << std::endl;
+            return 1;
+        }
+
+        if (!hasExplicitTier) {
+            tier = requestedTier;
+        }
+
+        if (tier == ClearanceTier::READ && !hasSeconds) {
+            seconds = 0; // Default indefinite for READ
+        } else if (tier != ClearanceTier::READ && !hasSeconds) {
+            seconds = 300; // Default 300s for READ/WRITE
+        }
+
+        std::string user = UnixAuth::getCurrentUsername();
+        std::string pass = readPasswordInteractive("Password for " + user + ": ");
+        if (pass.empty() || !UnixAuth::authenticate(pass)) {
+            std::cout << "Authentication failed: invalid UNIX password. Clearance denied." << std::endl;
+            AiSecurityClearanceManager::getInstance().consoleDeny(targetId);
+            return 1;
+        }
+
+        if (AiSecurityClearanceManager::getInstance().consoleApprove(targetId, seconds, tier)) {
+            std::cout << "Approved " << clearanceTierToString(tier) << " clearance for connection "
+                      << AiSecurityClearanceManager::formatConnId(targetId)
+                      << " (" << peerIp << ":" << peerPort << ") for "
+                      << (seconds == 0 ? "indefinite (0s)" : (std::to_string(seconds) + "s (downgrades to READ upon expiry)"))
+                      << "." << std::endl;
+        } else {
+            std::cout << "Approval failed (connection no longer pending or socket closed)." << std::endl;
+        }
+        return 0;
+    } else if (cmd == "deny") {
+        std::string targetStr;
+        iss >> targetStr;
+        uint64_t targetId = AiSecurityClearanceManager::parseConnId(targetStr);
+        uint32_t seconds = 0;
+        iss >> seconds;
+
+        if (targetId == 0) {
+            std::cout << "Usage: deny conn-nnnn [seconds]   (e.g., deny conn-0003)" << std::endl;
+            return 1;
+        }
+        uint64_t pendingId = 0;
+        std::string peerIp;
+        uint16_t peerPort = 0;
+        if (!AiSecurityClearanceManager::getInstance().hasPendingApproval(pendingId, peerIp, peerPort) || pendingId != targetId) {
+            std::cout << "No pending clearance request for connection " << AiSecurityClearanceManager::formatConnId(targetId) << "." << std::endl;
+            return 1;
+        }
+        if (AiSecurityClearanceManager::getInstance().consoleDeny(targetId, seconds)) {
+            std::cout << "Denied Level 2 clearance for connection "
+                      << AiSecurityClearanceManager::formatConnId(targetId)
+                      << " (" << peerIp << ":" << peerPort << ")";
+            if (seconds > 0) {
+                std::cout << " with " << seconds << "s lockout.";
+            } else {
+                std::cout << ".";
+            }
+            std::cout << std::endl;
+        } else {
+            std::cout << "Denial failed (connection no longer pending)." << std::endl;
+        }
+        return 0;
     } else if (cmd == "quit" || cmd == "exit") {
-        _executingCommand.store(false);
         return -1;
     } else {
         std::cout << "Unknown command: '" << cmd << "'. Type 'help' for available commands." << std::endl;
     }
 
-    _executingCommand.store(false);
     return 0;
 }
 
@@ -573,160 +691,49 @@ void NetMonShell::cmdRouterTraceroute(const std::string &target) {
     }
 }
 
-void NetMonShell::cmdPolicy(const std::string &mode) {
-    if (mode.empty()) {
-        PolicyMode current = SecurityCheckpoint::getInstance().getPolicyMode();
-        std::cout << "Current security policy mode: "
-                  << SecurityCheckpoint::policyModeToString(current) << std::endl;
-        return;
-    }
-    if (!isAuthenticated()) {
-        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
-        return;
-    }
-    PolicyMode m = SecurityCheckpoint::stringToPolicyMode(mode);
-    SecurityCheckpoint::getInstance().setPolicyMode(m);
-    std::cout << "Security policy mode updated to: "
-              << SecurityCheckpoint::policyModeToString(m) << std::endl;
-}
-
-void NetMonShell::cmdPending() {
-    if (!isAuthenticated()) {
-        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
-        return;
-    }
-    auto tickets = SecurityCheckpoint::getInstance().getPendingTickets("pending");
-    if (tickets.empty()) {
-        std::cout << "No pending action tickets in queue." << std::endl;
-        return;
-    }
-    std::cout << "----------------------------------------------------------------------------------" << std::endl;
-    std::cout << std::left << std::setw(6) << "ID"
-              << std::setw(12) << "CREATED"
-              << std::setw(12) << "REQUESTER"
-              << std::setw(22) << "TOOL"
-              << "PAYLOAD" << std::endl;
-    std::cout << "----------------------------------------------------------------------------------" << std::endl;
-    for (const auto &t : tickets) {
-        std::cout << std::left << std::setw(6) << t.id
-                  << std::setw(12) << formatRelativeTime(t.createdAt)
-                  << std::setw(12) << t.requester
-                  << std::setw(22) << t.tool
-                  << t.payload << std::endl;
-    }
-    std::cout << "----------------------------------------------------------------------------------" << std::endl;
-}
-
-void NetMonShell::cmdApprove(int64_t id) {
-    if (!isAuthenticated()) {
-        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
-        return;
-    }
-    if (id <= 0) {
-        std::cout << "Usage: approve <ticket_id>" << std::endl;
-        return;
-    }
-    std::string outErr;
-    if (SecurityCheckpoint::getInstance().approve(id, outErr)) {
-        std::cout << "Ticket #" << id << " successfully approved and executed on router." << std::endl;
+void NetMonShell::cmdAuthList() {
+    auto grants = AiSecurityClearanceManager::getInstance().getActiveClearances();
+    std::cout << "\n=== Active AI Security Clearances ===" << std::endl;
+    if (grants.empty()) {
+        std::cout << "  (no active AI security clearances)" << std::endl;
     } else {
-        std::cout << "Approval failed for ticket #" << id << ": " << outErr << std::endl;
+        std::cout << "  "
+                  << std::left
+                  << std::setw(12) << "Connection"
+                  << std::setw(24) << "Peer Address"
+                  << std::setw(12) << "State"
+                  << std::setw(14) << "Expires In"
+                  << "Metadata" << std::endl;
+        std::cout << "  " << std::string(72, '-') << std::endl;
+        for (const auto &g : grants) {
+            std::string stateStr;
+            switch (g.clearanceState) {
+            case ClientClearanceState::LEVEL2: stateStr = "READ/WRITE"; break;
+            case ClientClearanceState::LEVEL3: stateStr = "READ"; break;
+            case ClientClearanceState::PENDING: stateStr = "PENDING"; break;
+            case ClientClearanceState::DENIED: stateStr = "DENIED"; break;
+            case ClientClearanceState::NONE: stateStr = "NONE"; break;
+            default: stateStr = "UNKNOWN"; break;
+            }
+            std::string expStr;
+            if (g.clearanceState == ClientClearanceState::LEVEL2 || g.clearanceState == ClientClearanceState::DENIED) {
+                expStr = std::to_string(g.remainingSeconds) + "s";
+            } else if (g.clearanceState == ClientClearanceState::LEVEL3) {
+                expStr = (g.remainingSeconds > 0) ? (std::to_string(g.remainingSeconds) + "s") : "indefinite";
+            } else {
+                expStr = "-";
+            }
+            std::string peer = g.peerAddress + ":" + std::to_string(g.peerPort);
+            std::cout << "  "
+                      << std::left
+                      << std::setw(12) << g.formattedConnId
+                      << std::setw(24) << peer
+                      << std::setw(12) << stateStr
+                      << std::setw(14) << expStr
+                      << (g.metadata.empty() ? "-" : g.metadata) << std::endl;
+        }
     }
-}
-
-void NetMonShell::cmdDeny(int64_t id, const std::string &reason) {
-    if (!isAuthenticated()) {
-        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
-        return;
-    }
-    if (id <= 0) {
-        std::cout << "Usage: deny <ticket_id> [reason]" << std::endl;
-        return;
-    }
-    std::string r = reason.empty() ? "Rejected by operator" : reason;
-    if (SecurityCheckpoint::getInstance().deny(id, r)) {
-        std::cout << "Ticket #" << id << " denied. (" << r << ")" << std::endl;
-    } else {
-        std::cout << "Failed to deny ticket #" << id << " (not in pending state or does not exist)." << std::endl;
-    }
-}
-
-void NetMonShell::cmdReconcile(int64_t id, const std::string &action) {
-    if (!isAuthenticated()) {
-        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
-        return;
-    }
-    if (id <= 0 || (action != "applied" && action != "retry")) {
-        std::cout << "Usage: reconcile <ticket_id> <applied|retry>" << std::endl;
-        return;
-    }
-    std::string outErr;
-    if (SecurityCheckpoint::getInstance().reconcile(id, action, outErr)) {
-        std::cout << "Ticket #" << id << " reconciled as: " << action << std::endl;
-    } else {
-        std::cout << "Reconciliation failed: " << outErr << std::endl;
-    }
-}
-
-void NetMonShell::cmdAudit(size_t limit) {
-    if (!isAuthenticated()) {
-        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
-        return;
-    }
-    auto records = SnmpDatabase::getInstance().getAllAuditOutbox();
-    if (records.empty()) {
-        std::cout << "No audit records found in SQLite authority." << std::endl;
-        return;
-    }
-    size_t count = (limit < records.size()) ? limit : records.size();
-    size_t start = records.size() - count;
-    std::cout << "----------------------------------------------------------------------------------" << std::endl;
-    std::cout << std::left << std::setw(6) << "SEQ"
-              << std::setw(12) << "TIME"
-              << std::setw(10) << "DECISION"
-              << std::setw(20) << "TOOL"
-              << "REASON" << std::endl;
-    std::cout << "----------------------------------------------------------------------------------" << std::endl;
-    for (size_t i = start; i < records.size(); ++i) {
-        const auto &r = records[i];
-        std::cout << std::left << std::setw(6) << r.sequence
-                  << std::setw(12) << formatRelativeTime(r.timestamp)
-                  << std::setw(10) << r.decision
-                  << std::setw(20) << r.tool
-                  << r.reason << std::endl;
-    }
-    std::cout << "----------------------------------------------------------------------------------" << std::endl;
-}
-
-void NetMonShell::cmdSyslog(size_t limit) {
-    if (!isAuthenticated()) {
-        std::cout << "Authentication required. Run 'auth login <password>' first." << std::endl;
-        return;
-    }
-    auto events = SnmpDatabase::getInstance().getSyslogEvents(limit);
-    if (events.empty()) {
-        std::cout << "No syslog events logged." << std::endl;
-        return;
-    }
-    std::cout << "----------------------------------------------------------------------------------" << std::endl;
-    std::cout << std::left << std::setw(6) << "ID"
-              << std::setw(12) << "TIME"
-              << std::setw(16) << "SOURCE"
-              << std::setw(6) << "PRI"
-              << std::setw(16) << "TAG"
-              << std::setw(8) << "TIME_ADJ"
-              << "MESSAGE" << std::endl;
-    std::cout << "----------------------------------------------------------------------------------" << std::endl;
-    for (const auto &e : events) {
-        std::cout << std::left << std::setw(6) << e.id
-                  << std::setw(12) << formatRelativeTime(e.timestamp)
-                  << std::setw(16) << e.sourceIp
-                  << std::setw(6) << (e.facility * 8 + e.severity)
-                  << std::setw(16) << e.tag
-                  << std::setw(8) << (e.timeAdjacent ? "YES" : "NO")
-                  << e.message << std::endl;
-    }
-    std::cout << "----------------------------------------------------------------------------------" << std::endl;
+    std::cout << std::endl;
 }
 
 void NetMonShell::runInteractive() {
@@ -756,6 +763,8 @@ void NetMonShell::resetForTesting() {
     _running.store(false);
     _executingCommand.store(false);
     std::string().swap(_sessionToken);
+    std::lock_guard<std::mutex> lock(g_pwMutex);
+    g_pwReaderForTesting = nullptr;
 }
 
 /*

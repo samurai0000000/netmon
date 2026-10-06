@@ -196,8 +196,24 @@ bool ZyxelSystemCmd::parseConnStatus(const std::string &raw, ZyxelSessionSummary
             }
         }
 
-        // Check "Active sessions: 142" or "Current sessions: 142" or "Sessions: 142"
-        if (lower.find("session") != std::string::npos && lower.find("max") == std::string::npos) {
+        // Check "Active sessions: 142" or "Active Session Number: 1319"
+        if (lower.find("active session") != std::string::npos ||
+            lower.find("current session") != std::string::npos) {
+            int act = 0;
+            if (ZyxelScanner::extractIntegerAfter(line, "active session number", act) ||
+                ZyxelScanner::extractIntegerAfter(line, "current session number", act) ||
+                ZyxelScanner::extractIntegerAfter(line, "active session", act) ||
+                ZyxelScanner::extractIntegerAfter(line, "current session", act) ||
+                ZyxelScanner::extractIntegerAfter(line, "session", act) ||
+                ZyxelScanner::extractIntegerAfter(line, "active", act) ||
+                ZyxelScanner::extractIntegerAfter(line, "current", act)) {
+                out.activeSessions = act;
+                foundActive = true;
+            }
+        } else if (!foundActive && lower.find("session") != std::string::npos &&
+                   lower.find("max") == std::string::npos &&
+                   lower.find("support") == std::string::npos &&
+                   lower.find("dpi") == std::string::npos) {
             int act = 0;
             if (ZyxelScanner::extractIntegerAfter(line, "session", act) ||
                 ZyxelScanner::extractIntegerAfter(line, "active", act) ||
@@ -207,10 +223,16 @@ bool ZyxelSystemCmd::parseConnStatus(const std::string &raw, ZyxelSessionSummary
             }
         }
 
-        // Check "Max sessions: 1000000" or "Maximum: 1000000"
-        if (lower.find("max") != std::string::npos) {
+        // Check "Support Session Number: 600000", "Max sessions: 1000000", or "Maximum: 1000000"
+        if (lower.find("support session") != std::string::npos ||
+            lower.find("max session") != std::string::npos ||
+            lower.find("maximum session") != std::string::npos ||
+            lower.find("max") != std::string::npos) {
             int maxS = 0;
-            if (ZyxelScanner::extractIntegerAfter(line, "max session", maxS) ||
+            if (ZyxelScanner::extractIntegerAfter(line, "support session number", maxS) ||
+                ZyxelScanner::extractIntegerAfter(line, "support session", maxS) ||
+                ZyxelScanner::extractIntegerAfter(line, "max session number", maxS) ||
+                ZyxelScanner::extractIntegerAfter(line, "max session", maxS) ||
                 ZyxelScanner::extractIntegerAfter(line, "maximum session", maxS) ||
                 ZyxelScanner::extractIntegerAfter(line, "max", maxS)) {
                 out.maxSessions = maxS;

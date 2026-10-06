@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <functional>
 
 class NetMonShell {
 public:
@@ -20,6 +21,9 @@ public:
 
     int executeCommand(const std::string &cmdLine);
     void resetForTesting();
+
+    using PasswordReaderFunc = std::function<std::string(const std::string &prompt)>;
+    void setPasswordReaderForTesting(PasswordReaderFunc reader);
 
     bool isExecutingCommand() const;
     void cancelCurrentCommand();
@@ -40,15 +44,9 @@ private:
     void cmdNameDevice(const std::string &mac, const std::string &name,
                        const std::string &category = "");
     void cmdReload();
-    void cmdPolicy(const std::string &mode = "");
-    void cmdPending();
-    void cmdApprove(int64_t id);
-    void cmdDeny(int64_t id, const std::string &reason = "");
-    void cmdReconcile(int64_t id, const std::string &action);
-    void cmdAudit(size_t limit = 50);
-    void cmdSyslog(size_t limit = 50);
     void cmdAuthLogin(const std::string &password);
     void cmdAuthSetPassword(const std::string &currentPass, const std::string &newPass);
+    void cmdAuthList();
     void cmdRouterSetPassword();
     void cmdRouterClearPassword();
     void cmdRouterStatus();

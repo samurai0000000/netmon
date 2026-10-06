@@ -74,6 +74,50 @@ inline constexpr const char* INDEX_HTML = R"rawliteral(<!DOCTYPE html>
                 </div>
             </section>
 
+            <!-- Firewall & Security Metrics Section -->
+            <section class="section-container" id="firewall-metrics-section">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>Firewall & Security Metrics</h2>
+                        <span class="badge-tag" id="firewall-status-badge">SSH Active Keepalive</span>
+                    </div>
+                </div>
+
+                <div class="metrics-grid">
+                    <!-- Session Capacity Card -->
+                    <div class="glass-card stat-card">
+                        <h3>Firewall Sessions</h3>
+                        <div class="stat-value" id="fw-active-sessions">-- <span class="unit">sessions</span></div>
+                        <div class="stat-detail-row">
+                            <span>Max Capacity: <strong id="fw-max-sessions">--</strong></span>
+                            <span>Utilization: <strong id="fw-usage-percent">--%</strong></span>
+                        </div>
+                    </div>
+
+                    <!-- Application Patrol Card -->
+                    <div class="glass-card stat-card">
+                        <h3>Application Patrol</h3>
+                        <div class="stat-value" id="app-patrol-forwarded">-- <span class="unit">KB fwd</span></div>
+                        <div class="stat-detail-row">
+                            <span>Dropped: <strong id="app-patrol-dropped" class="text-danger">-- KB</strong></span>
+                            <span>Rejected: <strong id="app-patrol-rejected" class="text-warning">-- KB</strong></span>
+                            <span>Matched: <strong id="app-patrol-matched">--</strong></span>
+                        </div>
+                    </div>
+
+                    <!-- IDP Threat Inspection Card -->
+                    <div class="glass-card stat-card">
+                        <h3>IDP Threat Inspection</h3>
+                        <div class="stat-value" id="idp-threats-detected">-- <span class="unit">threats</span></div>
+                        <div class="stat-detail-row">
+                            <span>Status: <strong id="idp-status-text">--</strong></span>
+                            <span>Dropped: <strong id="idp-packets-dropped" class="text-danger">--</strong></span>
+                            <span>Reset: <strong id="idp-connections-reset" class="text-warning">--</strong></span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- Secondary Metrics Grid: LAN Traffic & Top Talkers -->
             <section class="section-container">
                 <div class="section-header">

@@ -16,6 +16,8 @@ Config &Config::getInstance() {
     return instance;
 }
 
+static const std::string s_defaultAuditFile = "~/.config/netmon/audit.log";
+
 Config::Config()
     : _configPath("")
     , _interface("br0")
@@ -26,12 +28,13 @@ Config::Config()
     , _logLevel("info")
     , _allowAiBlockIp(false)
     , _allowAiRawExec(false)
-    , _snmpPollIntervalSec(30)
-    , _databaseFile("~/.config/netmon/netmon_telemetry.db")
-    , _rawRetentionDays(90)
     , _routerDryRun(false)
     , _routerLiveEnabled(false)
-    , _routerFlashWrite(false) {
+    , _routerFlashWrite(false)
+    , _snmpPollIntervalSec(30)
+    , _databaseFile("~/.config/netmon/netmon_telemetry.db")
+    , _auditFile()
+    , _rawRetentionDays(90) {
     _webConfig.enabled = true;
     _webConfig.port = 3884;
     _webConfig.bindAddress = "0.0.0.0";
@@ -60,6 +63,7 @@ void Config::resetForTesting() {
     _snmpTargets.clear();
     _snmpTargets.shrink_to_fit();
     _databaseFile = "~/.config/netmon/netmon_telemetry.db";
+    std::string().swap(_auditFile);
     _rawRetentionDays = 90;
     _webConfig.enabled = true;
     _webConfig.port = 3884;
@@ -127,9 +131,19 @@ bool Config::load(const std::string &customPath) {
         cfg.lookupValue("router_live_enabled", _routerLiveEnabled);
         cfg.lookupValue("router_flash_write", _routerFlashWrite);
         cfg.lookupValue("database_file", _databaseFile);
+        cfg.lookupValue("audit_file", _auditFile);
         cfg.lookupValue("raw_retention_days", _rawRetentionDays);
     } catch (const libconfig::SettingNotFoundException &) {
         // Some settings were missing, keep defaults
+    }
+
+    // Security section
+    if (cfg.exists("security")) {
+        try {
+            const libconfig::Setting &secSetting = cfg.lookup("security");
+            secSetting.lookupValue("audit_file", _auditFile);
+        } catch (const libconfig::SettingNotFoundException &) {
+        }
     }
 
     // Web section
@@ -202,6 +216,8 @@ bool Config::load(const std::string &customPath) {
 
     const char *envDb = getenv("NETMON_DB_PATH");
     if (envDb && *envDb) _databaseFile = envDb;
+    const char *envAudit = getenv("NETMON_AUDIT_FILE");
+    if (envAudit && *envAudit) _auditFile = envAudit;
     const char *envRetention = getenv("NETMON_DB_RETENTION_DAYS");
     if (envRetention && *envRetention) _rawRetentionDays = std::atoi(envRetention);
 
@@ -351,6 +367,13 @@ bool Config::save() {
             root.add("router_flash_write", libconfig::Setting::TypeBoolean) = _routerFlashWrite;
         } else {
             root["router_flash_write"] = _routerFlashWrite;
+        }
+
+        const std::string &auditToSave = getAuditFile();
+        if (!root.exists("audit_file")) {
+            root.add("audit_file", libconfig::Setting::TypeString) = auditToSave;
+        } else {
+            root["audit_file"] = auditToSave;
         }
 
         cfg.writeFile(_configPath.c_str());
@@ -536,6 +559,21 @@ bool Config::getRouterFlashWrite() const {
 
 void Config::setRouterFlashWrite(bool enable) {
     _routerFlashWrite = enable;
+}
+
+const std::string &Config::getAuditFile() const {
+    if (_auditFile.empty()) {
+        return s_defaultAuditFile;
+    }
+    return _auditFile;
+}
+
+void Config::setAuditFile(const std::string &file) {
+    if (file == s_defaultAuditFile || file.empty()) {
+        std::string().swap(_auditFile);
+    } else {
+        _auditFile = file;
+    }
 }
 
 /*

@@ -303,6 +303,45 @@ TEST(ZyxelSshClientTest, DrainUntilPromptHandlesCancellation) {
     STRCMP_EQUAL("\x03\n", writtenData.c_str());
 }
 
+TEST(ZyxelSshClientTest, DrainUntilPromptHandlesAnsiMorePagination) {
+    ZyxelSshClient client;
+    int step = 0;
+    std::string writtenData;
+    std::string page1 = "Line 1\r\nLine 2\r\n\x1b[7m--More--\x1b[m";
+    std::string page2 = "Line 3\r\nLine 4\r\nRouter> ";
+
+    auto reader = [&](char *buf, size_t buflen, bool &eofOut) -> ssize_t {
+        (void)buflen;
+        eofOut = false;
+        step++;
+        if (step == 1) {
+            std::memcpy(buf, page1.data(), page1.size());
+            return static_cast<ssize_t>(page1.size());
+        } else if (step == 2) {
+            if (writtenData == " ") {
+                std::memcpy(buf, page2.data(), page2.size());
+                return static_cast<ssize_t>(page2.size());
+            }
+            return 0;
+        }
+        return 0;
+    };
+
+    auto writer = [&](const char *data, size_t len) {
+        writtenData.append(data, len);
+    };
+
+    std::string out;
+    SshResult res = client.drainUntilPromptForTesting(reader, writer, out, 1000);
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(res));
+    STRCMP_EQUAL(" ", writtenData.c_str());
+    CHECK_TRUE(out.find("Line 1") != std::string::npos);
+    CHECK_TRUE(out.find("Line 2") != std::string::npos);
+    CHECK_TRUE(out.find("Line 3") != std::string::npos);
+    CHECK_TRUE(out.find("Line 4") != std::string::npos);
+    CHECK_TRUE(out.find("--More--") == std::string::npos);
+}
+
 /*
  * Local variables:
  * mode: C++

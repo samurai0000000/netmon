@@ -18,6 +18,9 @@ public:
     virtual nlohmann::json getSessions() = 0;
     virtual nlohmann::json blockIp(const std::string &ip, const std::string &reason) = 0;
     virtual nlohmann::json unblockIp(const std::string &ip) = 0;
+    virtual nlohmann::json getSecurityMetrics() {
+        return nlohmann::json::object();
+    }
 };
 
 #endif /* NETMON_ROUTERDRIVER_HXX */

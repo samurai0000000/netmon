@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(netmon VERSION 1.0.5 LANGUAGES CXX)
+project(netmon VERSION 1.0.6 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -82,12 +82,15 @@ set(SOURCES
     src/SyslogServer.cxx
     src/InstanceLock.cxx
     src/NcursesConsole.cxx
+    src/AiSecurityClearance.cxx
+    src/UnixAuth.cxx
     src/zyxel/ZyxelScanner.cxx
     src/zyxel/ZyxelSystemCmd.cxx
     src/zyxel/ZyxelNetworkCmd.cxx
     src/zyxel/ZyxelObjectCmd.cxx
     src/zyxel/ZyxelFirewallCmd.cxx
     src/zyxel/ZyxelNatCmd.cxx
+    src/zyxel/ZyxelSecurityCmd.cxx
 )
 
 add_executable(netmon ${SOURCES})
@@ -136,6 +139,10 @@ if(LIBSSH2_LIBRARY_DIRS)
     target_link_directories(netmon PRIVATE ${LIBSSH2_LIBRARY_DIRS})
 endif()
 
+# Clearance client executable
+add_executable(netmon-ai-client client/netmon-ai-client.c)
+set_target_properties(netmon-ai-client PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
+
 # Test suite executable
 set(TEST_SOURCES
     test/TestMain.cxx
@@ -147,6 +154,10 @@ set(TEST_SOURCES
     test/TestSyslogIngest.cxx
     test/TestInstanceLock.cxx
     test/TestNcursesConsole.cxx
+    test/TestAiSecurityClearance.cxx
+    test/TestAiSecurityAdversarial.cxx
+    test/TestClearanceClient.cxx
+    src/AiSecurityClearance.cxx
     src/AuthManager.cxx
     src/WebServer.cxx
     src/Config.cxx
@@ -165,6 +176,7 @@ set(TEST_SOURCES
     src/ZyxelSshClient.cxx
     src/InstanceLock.cxx
     src/NcursesConsole.cxx
+    src/UnixAuth.cxx
 )
 
 add_executable(test_netmon_suite ${TEST_SOURCES})
@@ -196,6 +208,8 @@ target_link_libraries(test_netmon_suite PRIVATE
     ${LIBSSH2_LIBRARIES}
     ${CPPUTEST_LIBRARIES}
 )
+
+add_dependencies(test_netmon_suite netmon-ai-client)
 
 if(CONFIGPP_LIBRARY_DIRS)
     target_link_directories(test_netmon_suite PRIVATE ${CONFIGPP_LIBRARY_DIRS})
@@ -230,6 +244,7 @@ set(ZYXEL_TEST_SOURCES
     test/TestZyxelObjectCmd.cxx
     test/TestZyxelFirewallCmd.cxx
     test/TestZyxelNatCmd.cxx
+    test/TestZyxelSecurityCmd.cxx
     src/ZyxelDriver.cxx
     src/ZyxelSshClient.cxx
     src/zyxel/ZyxelScanner.cxx
@@ -238,6 +253,7 @@ set(ZYXEL_TEST_SOURCES
     src/zyxel/ZyxelObjectCmd.cxx
     src/zyxel/ZyxelFirewallCmd.cxx
     src/zyxel/ZyxelNatCmd.cxx
+    src/zyxel/ZyxelSecurityCmd.cxx
     src/AuthManager.cxx
     src/Config.cxx
 )
@@ -300,6 +316,7 @@ add_executable(test_zyxel_parsers_fuzz
     src/zyxel/ZyxelObjectCmd.cxx
     src/zyxel/ZyxelFirewallCmd.cxx
     src/zyxel/ZyxelNatCmd.cxx
+    src/zyxel/ZyxelSecurityCmd.cxx
     src/ZyxelSshClient.cxx
     src/Config.cxx
 )

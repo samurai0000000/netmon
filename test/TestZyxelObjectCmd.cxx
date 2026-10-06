@@ -35,6 +35,15 @@ TEST(ZyxelObjectCmdTest, CommandGeneratorsReturnExpectedStrings) {
                  ZyxelObjectCmd::cmdAddService("Svc1", "tcp", 8080).c_str());
     STRCMP_EQUAL("no service-object Svc1",
                  ZyxelObjectCmd::cmdDeleteService("Svc1").c_str());
+
+    STRCMP_EQUAL("show object-group address",
+                 ZyxelObjectCmd::cmdShowAddressGroup("").c_str());
+    STRCMP_EQUAL("show object-group address RD",
+                 ZyxelObjectCmd::cmdShowAddressGroup("RD").c_str());
+    STRCMP_EQUAL("show object-group service",
+                 ZyxelObjectCmd::cmdShowServiceGroup("").c_str());
+    STRCMP_EQUAL("show object-group service SG1",
+                 ZyxelObjectCmd::cmdShowServiceGroup("SG1").c_str());
 }
 
 TEST(ZyxelObjectCmdTest, ParseAddressObjectsManualPage461Transcript) {

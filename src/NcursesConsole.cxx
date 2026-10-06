@@ -12,6 +12,8 @@
 #include "AimonGatewayClient.hxx"
 #include "DeviceRegistry.hxx"
 #include "NetMonShell.hxx"
+#include "AiSecurityClearance.hxx"
+#include "UnixAuth.hxx"
 #include <sstream>
 #include <iomanip>
 #include <iostream>
@@ -191,6 +193,9 @@ bool NcursesConsole::init() {
         init_pair(PAIR_ERROR, COLOR_RED, -1);
         init_pair(PAIR_TEXT, COLOR_WHITE, -1);
         init_pair(PAIR_MUTED, COLOR_WHITE, -1);
+        init_pair(PAIR_TIER_READ, COLOR_GREEN, -1);
+        init_pair(PAIR_TIER_WRITE, COLOR_RED, -1);
+        init_pair(PAIR_TIER_ELEVATED, COLOR_RED, -1);
     }
 
     setupWindows();
@@ -349,11 +354,12 @@ void NcursesConsole::updateHeader() {
     wrefresh(_headerWin);
 }
 
-void NcursesConsole::addOutputLine(const std::string &line, int colorPair, bool isBold) {
+void NcursesConsole::addOutputLine(const std::string &line, int colorPair, bool isBold, bool isBlink) {
     OutputLine item;
     item.text = line;
     item.colorPair = colorPair;
     item.isBold = isBold;
+    item.isBlink = isBlink;
 
     _cmdHistory.push_back(item);
     while (_cmdHistory.size() > MAX_HISTORY_LINES) {
@@ -366,13 +372,13 @@ void NcursesConsole::addOutputLine(const std::string &line, int colorPair, bool 
     }
 }
 
-void NcursesConsole::logOutput(const std::string &text, int colorPair, bool isBold) {
+void NcursesConsole::logOutput(const std::string &text, int colorPair, bool isBold, bool isBlink) {
     std::lock_guard<std::recursive_mutex> lock(_uiMutex);
 
     int maxCols = (_termCols > 1) ? (_termCols - 1) : 79;
     auto wrapped = wrapText(text, maxCols);
     for (const auto &l : wrapped) {
-        addOutputLine(l, colorPair, isBold);
+        addOutputLine(l, colorPair, isBold, isBlink);
     }
 
     renderMiddlePanel();
@@ -474,6 +480,9 @@ void NcursesConsole::renderMiddlePanel() {
             if (line.isBold) {
                 attrs |= A_BOLD;
             }
+            if (line.isBlink) {
+                attrs |= A_BLINK;
+            }
 
             if (attrs != 0) wattron(_cmdWin, attrs);
             mvwprintw(_cmdWin, row, 0, "%s", line.text.c_str());
@@ -509,6 +518,7 @@ void NcursesConsole::redrawInputLine() {
         return;
     }
 
+
     wattron(_inputWin, COLOR_PAIR(PAIR_PROMPT) | A_BOLD);
     mvwprintw(_inputWin, 0, 0, "netmon> ");
     wattroff(_inputWin, COLOR_PAIR(PAIR_PROMPT) | A_BOLD);
@@ -533,6 +543,42 @@ void NcursesConsole::redrawInputLine() {
     // Explicitly lock hardware cursor at the prompt insertion point
     wmove(_inputWin, 0, cursorCol);
     wrefresh(_inputWin);
+}
+
+std::string NcursesConsole::promptPassword(const std::string &promptMsg) {
+    std::string password;
+    while (_running.load()) {
+        wmove(_inputWin, 0, 0);
+        wattron(_inputWin, COLOR_PAIR(PAIR_WARN) | A_BOLD);
+        mvwprintw(_inputWin, 0, 0, "%s", promptMsg.c_str());
+        wattroff(_inputWin, COLOR_PAIR(PAIR_WARN) | A_BOLD);
+        wclrtoeol(_inputWin);
+
+        std::string stars(password.size(), '*');
+        wattron(_inputWin, COLOR_PAIR(PAIR_TEXT));
+        wprintw(_inputWin, "%s", stars.c_str());
+        wattroff(_inputWin, COLOR_PAIR(PAIR_TEXT));
+
+        int cursorCol = std::min(_termCols - 1, static_cast<int>(promptMsg.size() + stars.size()));
+        wmove(_inputWin, 0, cursorCol);
+        wrefresh(_inputWin);
+
+        int ch = wgetch(_inputWin);
+        if (ch == 3 || ch == 27) { // Ctrl+C or ESC
+            return "";
+        }
+        if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
+            break;
+        }
+        if (ch == KEY_BACKSPACE || ch == 127 || ch == 8 || ch == '\b') {
+            if (!password.empty()) {
+                password.pop_back();
+            }
+        } else if (ch >= 32 && ch <= 126) {
+            password += static_cast<char>(ch);
+        }
+    }
+    return password;
 }
 
 void NcursesConsole::processCommand(const std::string &line) {
@@ -572,6 +618,131 @@ void NcursesConsole::processCommand(const std::string &line) {
         if (_shutdownCb) {
             _shutdownCb();
         }
+        return;
+    }
+
+    std::istringstream iss(trimmed);
+    std::string commandName;
+    iss >> commandName;
+    if (commandName == "grant" || commandName == "approve") {
+        std::string targetStr;
+        iss >> targetStr;
+        uint64_t targetId = AiSecurityClearanceManager::parseConnId(targetStr);
+        uint32_t seconds = 300;
+        bool hasSeconds = false;
+        bool hasExplicitTier = false;
+        ClearanceTier tier = ClearanceTier::READ_WRITE;
+
+        std::string optArg;
+        while (iss >> optArg) {
+            if (optArg == "read" || optArg == "READ") {
+                tier = ClearanceTier::READ;
+                hasExplicitTier = true;
+            } else if (optArg == "write" || optArg == "WRITE" || optArg == "readwrite" || optArg == "read/write") {
+                tier = ClearanceTier::READ_WRITE;
+                hasExplicitTier = true;
+            } else if (optArg == "password" || optArg == "elevated") {
+                tier = ClearanceTier::READ_WRITE_PASSWORD;
+                hasExplicitTier = true;
+            } else {
+                try {
+                    seconds = std::stoul(optArg);
+                    hasSeconds = true;
+                } catch (...) {}
+            }
+        }
+
+        if (targetId == 0) {
+            addOutputLine("Usage: grant conn-nnnn [seconds] [read|write]  (e.g., grant conn-0003 300)", PAIR_WARN, false);
+            renderMiddlePanel();
+            redrawInputLine();
+            return;
+        }
+        uint64_t pendingId = 0;
+        std::string peerIp;
+        uint16_t peerPort = 0;
+        ClearanceTier requestedTier = ClearanceTier::READ_WRITE;
+        if (!AiSecurityClearanceManager::getInstance().hasPendingApproval(pendingId, peerIp, peerPort, &requestedTier) || pendingId != targetId) {
+            addOutputLine("No pending clearance request for connection " + AiSecurityClearanceManager::formatConnId(targetId) + ".", PAIR_WARN, false);
+            renderMiddlePanel();
+            redrawInputLine();
+            return;
+        }
+
+        if (!hasExplicitTier) {
+            tier = requestedTier;
+        }
+
+        if (tier == ClearanceTier::READ && !hasSeconds) {
+            seconds = 0; // Default indefinite for READ
+        } else if (tier != ClearanceTier::READ && !hasSeconds) {
+            seconds = 300; // Default 300s for READ/WRITE
+        }
+
+        std::string user = UnixAuth::getCurrentUsername();
+        std::string pass = promptPassword("Password for " + user + ": ");
+        if (pass.empty()) {
+            addOutputLine("Approval aborted by operator.", PAIR_WARN, true);
+            renderMiddlePanel();
+            redrawInputLine();
+            return;
+        }
+        if (!UnixAuth::authenticate(pass)) {
+            addOutputLine("Authentication failed: invalid UNIX password. Clearance denied.", PAIR_WARN, true);
+            AiSecurityClearanceManager::getInstance().consoleDeny(targetId);
+            renderMiddlePanel();
+            redrawInputLine();
+            return;
+        }
+
+        if (AiSecurityClearanceManager::getInstance().consoleApprove(targetId, seconds, tier)) {
+            addOutputLine("Approved " + clearanceTierToString(tier) + " clearance for connection " +
+                          AiSecurityClearanceManager::formatConnId(targetId) +
+                          " (" + peerIp + ":" + std::to_string(peerPort) + ") for " +
+                          (seconds == 0 ? "indefinite (0s)" : (std::to_string(seconds) + "s (downgrades to READ upon expiry)")) +
+                          ".", PAIR_INFO, true);
+        } else {
+            addOutputLine("Approval failed (connection no longer pending or socket closed).", PAIR_WARN, true);
+        }
+        renderMiddlePanel();
+        redrawInputLine();
+        return;
+    } else if (commandName == "deny") {
+        std::string targetStr;
+        iss >> targetStr;
+        uint64_t targetId = AiSecurityClearanceManager::parseConnId(targetStr);
+        uint32_t seconds = 0;
+        iss >> seconds;
+        if (targetId == 0) {
+            addOutputLine("Usage: deny conn-nnnn [seconds]   (e.g., deny conn-0003)", PAIR_WARN, false);
+            renderMiddlePanel();
+            redrawInputLine();
+            return;
+        }
+        uint64_t pendingId = 0;
+        std::string peerIp;
+        uint16_t peerPort = 0;
+        if (!AiSecurityClearanceManager::getInstance().hasPendingApproval(pendingId, peerIp, peerPort) || pendingId != targetId) {
+            addOutputLine("No pending clearance request for connection " + AiSecurityClearanceManager::formatConnId(targetId) + ".", PAIR_WARN, false);
+            renderMiddlePanel();
+            redrawInputLine();
+            return;
+        }
+        if (AiSecurityClearanceManager::getInstance().consoleDeny(targetId, seconds)) {
+            std::string msg = "Denied Level 2 clearance for connection " +
+                              AiSecurityClearanceManager::formatConnId(targetId) +
+                              " (" + peerIp + ":" + std::to_string(peerPort) + ")";
+            if (seconds > 0) {
+                msg += " with " + std::to_string(seconds) + "s lockout.";
+            } else {
+                msg += ".";
+            }
+            addOutputLine(msg, PAIR_WARN, true);
+        } else {
+            addOutputLine("Denial failed (connection no longer pending).", PAIR_WARN, true);
+        }
+        renderMiddlePanel();
+        redrawInputLine();
         return;
     }
 
@@ -755,6 +926,8 @@ void NcursesConsole::run() {
             redrawInputLine();
             continue;
         }
+
+
 
         // ESC / Escape sequences (Up, Down, PgUp, PgDn from screen/SSH)
         if (ch == 27) {

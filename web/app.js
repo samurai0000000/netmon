@@ -155,6 +155,7 @@
         await Promise.all([
             fetchStatus(),
             fetchWanTelemetry(),
+            fetchFirewallMetrics(),
             fetchTraffic(),
             fetchDevices()
         ]);
@@ -184,6 +185,73 @@
             }
         } catch (err) {
             console.error('Error fetching status:', err);
+        }
+    }
+
+    // 1b. Firewall & Security Metrics
+    async function fetchFirewallMetrics() {
+        try {
+            const res = await fetch('/api/firewall/metrics');
+            if (!res.ok) return;
+            const data = await res.json();
+
+            // Status badge
+            const statusBadge = document.getElementById('firewall-status-badge');
+            if (statusBadge) {
+                if (data.status === 'ok') {
+                    statusBadge.textContent = 'Active Keepalive (Connected)';
+                    statusBadge.className = 'badge-tag text-success';
+                } else if (data.status === 'offline') {
+                    statusBadge.textContent = 'Router Offline';
+                    statusBadge.className = 'badge-tag text-danger';
+                } else {
+                    statusBadge.textContent = data.status || 'Unconfigured';
+                    statusBadge.className = 'badge-tag text-muted';
+                }
+            }
+
+            // Sessions
+            if (data.sessions) {
+                const actEl = document.getElementById('fw-active-sessions');
+                if (actEl) actEl.innerHTML = `${data.sessions.active_sessions || 0} <span class="unit">sessions</span>`;
+                const maxEl = document.getElementById('fw-max-sessions');
+                if (maxEl) maxEl.textContent = data.sessions.max_sessions || '--';
+                const usageEl = document.getElementById('fw-usage-percent');
+                if (usageEl) {
+                    const pct = data.sessions.session_usage_percent !== undefined ?
+                        data.sessions.session_usage_percent.toFixed(1) : '--';
+                    usageEl.textContent = `${pct}%`;
+                }
+            }
+
+            // App Patrol
+            if (data.app_patrol) {
+                const fwdEl = document.getElementById('app-patrol-forwarded');
+                if (fwdEl) fwdEl.innerHTML = `${data.app_patrol.forwarded_kb || 0} <span class="unit">KB fwd</span>`;
+                const dropEl = document.getElementById('app-patrol-dropped');
+                if (dropEl) dropEl.textContent = `${data.app_patrol.dropped_kb || 0} KB`;
+                const rejEl = document.getElementById('app-patrol-rejected');
+                if (rejEl) rejEl.textContent = `${data.app_patrol.rejected_kb || 0} KB`;
+                const matchEl = document.getElementById('app-patrol-matched');
+                if (matchEl) matchEl.textContent = data.app_patrol.matched_connections || '0';
+            }
+
+            // IDP
+            if (data.idp) {
+                const threatEl = document.getElementById('idp-threats-detected');
+                if (threatEl) threatEl.innerHTML = `${data.idp.threats_detected || 0} <span class="unit">threats</span>`;
+                const stEl = document.getElementById('idp-status-text');
+                if (stEl) {
+                    stEl.textContent = data.idp.enabled ? 'Enabled' : 'Disabled';
+                    stEl.className = data.idp.enabled ? 'text-success' : 'text-muted';
+                }
+                const pDropEl = document.getElementById('idp-packets-dropped');
+                if (pDropEl) pDropEl.textContent = data.idp.packets_dropped || '0';
+                const cResetEl = document.getElementById('idp-connections-reset');
+                if (cResetEl) cResetEl.textContent = data.idp.connections_reset || '0';
+            }
+        } catch (err) {
+            console.error('Error fetching firewall metrics:', err);
         }
     }
 

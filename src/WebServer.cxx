@@ -14,6 +14,7 @@
 #include "DeviceRegistry.hxx"
 #include "AimonGatewayClient.hxx"
 #include "SecurityCheckpoint.hxx"
+#include "RouterDriver.hxx"
 #include "Version.hxx"
 
 #include <iostream>
@@ -187,6 +188,9 @@ std::string WebServer::getMcpHintForPath(const std::string &path, const std::str
     if (path == "/api/firewall/sessions") {
         return "Use official MCP tool 'firewall_get_sessions'.";
     }
+    if (path == "/api/firewall/metrics") {
+        return "Use official MCP tool 'firewall_get_metrics'.";
+    }
     if (path == "/api/firewall/block") {
         return "Use official MCP tool 'firewall_block_ip' with argument {\"ip\": \"...\"}.";
     }
@@ -284,6 +288,10 @@ int WebServer::getPort() const {
 
 int WebServer::getAdminPort() const {
     return _adminPort;
+}
+
+void WebServer::setRouterDriver(std::shared_ptr<RouterDriver> driver) {
+    _routerDriver = driver;
 }
 
 void WebServer::runDashboard() {
@@ -775,6 +783,17 @@ void WebServer::setupDashboardRoutes() {
     _server->Get("/api/devices", [](const httplib::Request &, httplib::Response &res) {
         json j = LanSniffer::getInstance().getDevicesJson();
         res.set_content(j.dump(), "application/json");
+    });
+
+    // 7. Firewall & Security Metrics API
+    _server->Get("/api/firewall/metrics", [this](const httplib::Request &, httplib::Response &res) {
+        if (_routerDriver) {
+            json j = _routerDriver->getSecurityMetrics();
+            res.set_content(j.dump(), "application/json");
+        } else {
+            res.status = 503;
+            res.set_content(json{{"status", "unconfigured"}, {"error", "Router driver not configured"}}.dump(), "application/json");
+        }
     });
 }
 

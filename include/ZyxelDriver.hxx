@@ -9,6 +9,7 @@
 
 #include "RouterDriver.hxx"
 #include "ZyxelSshClient.hxx"
+#include "zyxel/ZyxelTypes.hxx"
 
 #include <string>
 #include <vector>
@@ -49,6 +50,10 @@ public:
     virtual nlohmann::json getSessions() override;
     virtual nlohmann::json blockIp(const std::string &ip, const std::string &reason) override;
     virtual nlohmann::json unblockIp(const std::string &ip) override;
+    virtual nlohmann::json getSecurityMetrics() override;
+
+    ZyxelSecurityTelemetry getSecurityTelemetry() const;
+    void setSecurityTelemetryForTesting(const ZyxelSecurityTelemetry &telem);
 
     nlohmann::json ping(const std::string &target, int count = 4);
     nlohmann::json traceroute(const std::string &target);
@@ -69,7 +74,14 @@ public:
     bool replayJournal();
     void flushFlashWrite();
     void clearAuthFailure();
-    void cancelActiveCommand();
+    virtual void cancelActiveCommand();
+
+    virtual SshResult executeClearanceCommand(const std::string &command,
+                                            std::string &outputOut,
+                                            std::string &matchedPromptOut,
+                                            int timeoutMs = 5000);
+    virtual SshResult unwindToRootPrompt();
+    virtual std::string getLastMatchedPrompt() const;
 
     // Testing and isolation helpers
     void resetForTesting();
@@ -101,6 +113,7 @@ private:
     mutable std::mutex              _journalMutex;
     mutable std::mutex              _debounceMutex;
     mutable std::mutex              _dryRunMutex;
+    mutable std::mutex              _telemetryMutex;
 
     std::condition_variable         _debounceCv;
     std::atomic<bool>               _running;
@@ -119,6 +132,8 @@ private:
     std::vector<std::string>        _dryRunLog;
     std::chrono::steady_clock::time_point _lastAuthFailTime;
     std::chrono::steady_clock::time_point _lastMutationTime;
+    nlohmann::json                  _cachedStatus;
+    ZyxelSecurityTelemetry          _securityTelemetry;
 };
 
 #endif /* NETMON_ZYXELDRIVER_HXX */

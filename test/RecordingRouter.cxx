@@ -17,8 +17,17 @@ RecordingRouter::RecordingRouter() : ZyxelDriver() {
 void RecordingRouter::reset() {
     std::lock_guard<std::mutex> lock(_mutex);
     std::vector<CallRecord>().swap(_calls);
+    std::vector<ClearanceCall>().swap(_clearanceCalls);
+    _unwindCalls = 0;
+    _cancelCalls = 0;
     _blockIpSuccess = true;
     _unblockIpSuccess = true;
+    _nextClearanceResult = SshResult::SUCCESS;
+    std::string().swap(_nextClearanceOutput);
+    std::string("#").swap(_nextClearancePrompt);
+    std::string("#").swap(_currentPrompt);
+    _customResponseSet = false;
+    _executionDelayMs = 0;
 }
 
 void RecordingRouter::setBlockIpSuccess(bool success) {
@@ -49,6 +58,10 @@ nlohmann::json RecordingRouter::getSessions() {
     return {{"sessions", nlohmann::json::array()}};
 }
 
+nlohmann::json RecordingRouter::getSecurityMetrics() {
+    return {{"status", "ok"}, {"driver", "RecordingRouter"}};
+}
+
 nlohmann::json RecordingRouter::blockIp(const std::string &ip, const std::string &reason) {
     std::lock_guard<std::mutex> lock(_mutex);
     _calls.push_back({"blockIp", ip, reason});
@@ -65,6 +78,91 @@ nlohmann::json RecordingRouter::unblockIp(const std::string &ip) {
         return {{"status", "error"}, {"error", "Simulated router failure"}};
     }
     return {{"status", "success"}, {"action", "unblock"}, {"ip", ip}};
+}
+
+void RecordingRouter::setNextClearanceResponse(SshResult result, const std::string &output, const std::string &matchedPrompt) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _nextClearanceResult = result;
+    _nextClearanceOutput = output;
+    _nextClearancePrompt = matchedPrompt;
+    _customResponseSet = true;
+}
+
+void RecordingRouter::setCurrentPrompt(const std::string &prompt) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _currentPrompt = prompt;
+}
+
+std::vector<RecordingRouter::ClearanceCall> RecordingRouter::getClearanceCalls() const {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _clearanceCalls;
+}
+
+size_t RecordingRouter::getUnwindCalls() const {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _unwindCalls;
+}
+
+void RecordingRouter::setExecutionDelayMs(int delayMs) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _executionDelayMs = delayMs;
+}
+
+SshResult RecordingRouter::executeClearanceCommand(const std::string &command,
+                                                 std::string &outputOut,
+                                                 std::string &matchedPromptOut,
+                                                 int timeoutMs) {
+    int delay = 0;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _clearanceCalls.push_back({command, timeoutMs});
+        delay = _executionDelayMs;
+    }
+
+    if (delay > 0) {
+        int slept = 0;
+        while (slept < delay) {
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                if (_cancelCalls > 0) {
+                    outputOut = "Command cancelled";
+                    matchedPromptOut = _currentPrompt;
+                    return SshResult::ERR_INTERRUPTED;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            slept += 10;
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (_cancelCalls > 0) {
+        outputOut = "Command cancelled";
+        matchedPromptOut = _currentPrompt;
+        return SshResult::ERR_INTERRUPTED;
+    }
+    if (_customResponseSet) {
+        _customResponseSet = false;
+        outputOut = _nextClearanceOutput;
+        matchedPromptOut = _nextClearancePrompt;
+        _currentPrompt = _nextClearancePrompt;
+        return _nextClearanceResult;
+    }
+    outputOut = "[simulated] " + command;
+    matchedPromptOut = _currentPrompt;
+    return SshResult::SUCCESS;
+}
+
+SshResult RecordingRouter::unwindToRootPrompt() {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _unwindCalls++;
+    _currentPrompt = "#";
+    return SshResult::SUCCESS;
+}
+
+std::string RecordingRouter::getLastMatchedPrompt() const {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _currentPrompt;
 }
 
 // Implementations of ZyxelDriver when RecordingRouter replaces src/ZyxelDriver.cxx
@@ -125,6 +223,16 @@ nlohmann::json ZyxelDriver::traceroute(const std::string &target) {
     };
 }
 
+void RecordingRouter::cancelActiveCommand() {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _cancelCalls++;
+}
+
+size_t RecordingRouter::getCancelCalls() const {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _cancelCalls;
+}
+
 ZyxelDriver &ZyxelDriver::getInstance() {
     return RecordingRouter::getInstance();
 }
@@ -133,6 +241,34 @@ void ZyxelDriver::clearAuthFailure() {
 }
 
 void ZyxelDriver::cancelActiveCommand() {
+    RecordingRouter::getInstance().cancelActiveCommand();
+}
+
+SshResult ZyxelDriver::executeClearanceCommand(const std::string &command,
+                                              std::string &outputOut,
+                                              std::string &matchedPromptOut,
+                                              int timeoutMs) {
+    return RecordingRouter::getInstance().executeClearanceCommand(command, outputOut, matchedPromptOut, timeoutMs);
+}
+
+SshResult ZyxelDriver::unwindToRootPrompt() {
+    return RecordingRouter::getInstance().unwindToRootPrompt();
+}
+
+std::string ZyxelDriver::getLastMatchedPrompt() const {
+    return RecordingRouter::getInstance().getLastMatchedPrompt();
+}
+
+nlohmann::json ZyxelDriver::getSecurityMetrics() {
+    return RecordingRouter::getInstance().getSecurityMetrics();
+}
+
+ZyxelSecurityTelemetry ZyxelDriver::getSecurityTelemetry() const {
+    return ZyxelSecurityTelemetry();
+}
+
+void ZyxelDriver::setSecurityTelemetryForTesting(const ZyxelSecurityTelemetry &telem) {
+    (void)telem;
 }
 
 /*

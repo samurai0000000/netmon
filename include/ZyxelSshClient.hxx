@@ -64,6 +64,7 @@ public:
                             int timeoutMs = 5000);
 
     SshResult unwindToRootPrompt(int maxAttempts = 5);
+    std::string getLastMatchedPrompt() const;
     bool sendKeepalive();
     void resetForTesting();
 

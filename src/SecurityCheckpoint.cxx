@@ -421,7 +421,7 @@ std::string SecurityCheckpoint::getAuditFilePath() const {
     if (!_auditFilePath.empty()) {
         return _auditFilePath;
     }
-    return Config::resolveHomePath("~/.config/netmon/audit.log");
+    return Config::resolveHomePath(Config::getInstance().getAuditFile());
 }
 
 void SecurityCheckpoint::setAuditFilePath(const std::string &path) {

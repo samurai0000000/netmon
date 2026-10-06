@@ -11,6 +11,9 @@
 #include "OuiDatabase.hxx"
 #include "SecurityCheckpoint.hxx"
 #include "SnmpAggregator.hxx"
+#include "AiSecurityClearance.hxx"
+#include <openssl/sha.h>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <unistd.h>
 #include <sys/types.h>
@@ -273,6 +276,14 @@ json AimonGatewayClient::getRegistrationJson(uint16_t webPort) {
                     }}
                 },
                 {
+                    {"name", "firewall_get_metrics"},
+                    {"description", "Query active router firewall security telemetry including session capacity, Application Patrol traffic counters (forwarded/dropped/rejected KB), and IDP threat inspection counters."},
+                    {"inputSchema", {
+                        {"type", "object"},
+                        {"properties", json::object()}
+                    }}
+                },
+                {
                     {"name", "firewall_block_ip"},
                     {"description", "Insert a firewall drop rule to block an IP address. Validated against protected infrastructure invariants (router, servers, gateways)."},
                     {"inputSchema", {
@@ -302,6 +313,14 @@ json AimonGatewayClient::getRegistrationJson(uint16_t webPort) {
                             }}
                         }},
                         {"required", json::array({"ip"})}
+                    }}
+                },
+                {
+                    {"name", "netmon_get_clearance_client"},
+                    {"description", "Download the reviewed netmon router-clearance client. Before choosing a router line, read .agents/skills/netmon/references/zyxel-clearance.md. Compile the returned source, then pipe one connect/request/do/close batch into it. Reads and mutations both require explicit operator approval on the netmon console (grant <connection-id> [seconds] [read|write]). This tool does not change the router."},
+                    {"inputSchema", {
+                        {"type", "object"},
+                        {"properties", json::object()}
                     }}
                 },
                 {
@@ -471,6 +490,8 @@ std::string AimonGatewayClient::dispatchRequest(const std::string &line) {
                 resultText = toolFirewallGetStatus();
             } else if (toolName == "firewall_get_sessions") {
                 resultText = toolFirewallGetSessions();
+            } else if (toolName == "firewall_get_metrics") {
+                resultText = toolFirewallGetMetrics();
             } else if (toolName == "firewall_block_ip") {
                 std::string ip = args.value("ip", "");
                 std::string reason = args.value("reason", "");
@@ -478,6 +499,8 @@ std::string AimonGatewayClient::dispatchRequest(const std::string &line) {
             } else if (toolName == "firewall_unblock_ip") {
                 std::string ip = args.value("ip", "");
                 resultText = toolFirewallUnblockIp(ip);
+            } else if (toolName == "netmon_get_clearance_client") {
+                resultText = toolNetmonGetClearanceClient();
             } else if (toolName == "snmp_get_device_metrics") {
                 std::string targetIp = args.value("target_ip", "");
                 std::string filter = args.value("filter", "monitored");
@@ -663,15 +686,131 @@ std::string AimonGatewayClient::toolFirewallGetSessions() {
     return err.dump(2);
 }
 
+std::string AimonGatewayClient::toolFirewallGetMetrics() {
+    if (_routerDriver) {
+        return _routerDriver->getSecurityMetrics().dump(2);
+    }
+    json err = {
+        {"status", "unconfigured"},
+        {"error", "Router driver not initialized in netmon"}
+    };
+    return err.dump(2);
+}
+
 std::string AimonGatewayClient::toolFirewallBlockIp(const std::string &ip, const std::string &reason) {
-    json payload = {{"ip", ip}, {"reason", reason}};
-    json res = SecurityCheckpoint::getInstance().handleAgentMutation("firewall_block_ip", "ai_agent", payload);
-    return res.dump(2);
+    (void)ip;
+    (void)reason;
+    return "This tool no longer changes the firewall. Read\n"
+           ".agents/skills/netmon/references/zyxel-clearance.md and call\n"
+           "netmon_get_clearance_client.";
 }
 
 std::string AimonGatewayClient::toolFirewallUnblockIp(const std::string &ip) {
-    json payload = {{"ip", ip}};
-    json res = SecurityCheckpoint::getInstance().handleAgentMutation("firewall_unblock_ip", "ai_agent", payload);
+    (void)ip;
+    return "This tool no longer changes the firewall. Read\n"
+           ".agents/skills/netmon/references/zyxel-clearance.md and call\n"
+           "netmon_get_clearance_client.";
+}
+
+std::string AimonGatewayClient::toolNetmonGetClearanceClient() {
+    std::string source;
+    std::ifstream ifs("client/netmon-ai-client.c");
+    if (ifs.is_open()) {
+        std::stringstream ss;
+        ss << ifs.rdbuf();
+        source = ss.str();
+    }
+    if (source.empty()) {
+        std::ifstream ifs2("../client/netmon-ai-client.c");
+        if (ifs2.is_open()) {
+            std::stringstream ss;
+            ss << ifs2.rdbuf();
+            source = ss.str();
+        }
+    }
+
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char*>(source.data()), source.size(), hash);
+    char hexBuf[SHA256_DIGEST_LENGTH * 2 + 1];
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+        sprintf(hexBuf + i * 2, "%02x", hash[i]);
+    }
+    std::string sha256Str = hexBuf;
+
+    std::string listenAddr = "127.0.0.1:3885";
+    if (AiSecurityClearanceManager::getInstance().isListening()) {
+        std::string bind = AiSecurityClearanceManager::getInstance().getBindAddress();
+        uint16_t port = AiSecurityClearanceManager::getInstance().getPort();
+        if (bind != "0.0.0.0") {
+            listenAddr = bind + ":" + std::to_string(port);
+        } else {
+            listenAddr = "127.0.0.1:" + std::to_string(port);
+        }
+    }
+
+    json res = {
+        {"protocol_version", 1},
+        {"filename", "netmon-ai-client.c"},
+        {"compiler_argv", json::array({"gcc", "-std=c99", "-Wall", "-Wextra", "-pedantic", "-O2", "netmon-ai-client.c", "-o", "netmon-ai-client"})},
+        {"listen", listenAddr},
+        {"skill", ".agents/skills/netmon/references/zyxel-clearance.md"},
+        {"commands", json::array({
+            "show version",
+            "show cpu status",
+            "show mem status",
+            "show conn status",
+            "ping <ipv4> count <1-20>",
+            "traceroute <ipv4>",
+            "show interface summary all",
+            "show interface <name>",
+            "show ip route-settings",
+            "show zone",
+            "show arp-table",
+            "show address-object",
+            "show address-object <name>",
+            "show object-group address",
+            "show object-group address <name>",
+            "show object-group service",
+            "show object-group service <name>",
+            "show service-object",
+            "show service-object <name>",
+            "show secure-policy",
+            "show secure-policy <name-or-number>",
+            "show ip virtual-server",
+            "show ip virtual-server <name>",
+            "ip route <ipv4> <mask> <ipv4> <metric>",
+            "no ip route <ipv4> <mask> <ipv4>",
+            "address-object <name> <ipv4>",
+            "address-object <name> <ipv4>-<ipv4>",
+            "address-object <name> <ipv4>/<prefix>",
+            "address-object <name> <ipv4>/<dotted-quad>",
+            "no address-object <name>",
+            "address-group <name> <name>",
+            "no address-group <name> <name>",
+            "service-object <name> <proto> eq <port>",
+            "no service-object <name>",
+            "secure-policy insert <position>",
+            "no secure-policy <name-or-number>",
+            "ip virtual-server <name>",
+            "description <one-line text up to 60 characters, no control characters>",
+            "name <name>",
+            "from <name>",
+            "to <name>",
+            "sourceip <name>",
+            "destinationip <name>",
+            "service <name>",
+            "action allow",
+            "action deny",
+            "activate",
+            "deactivate",
+            "exit",
+            "write",
+            "reboot"
+        })},
+        {"procedure", "netmon-ai-client.c\n\nPersistent local daemon client for netmon router-clearance connections.\nThis program holds one router connection open across multiple discrete\nprocess invocations using a local UNIX domain socket bound to the session anchor.\n\nRead .agents/skills/netmon/references/zyxel-clearance.md before choosing\na router line. If that file is not available, use only the commands\narray from netmon_get_clearance_client. Compile with compiler_argv from\nthat tool:\n  gcc -std=c99 -Wall -Wextra -pedantic -O2 netmon-ai-client.c -o netmon-ai-client\n\nLifecycle commands:\n  ./netmon-ai-client request <R|RW|RWP>\n      Auto-spawns the background daemon and connects to netmon.\n      Sends REQUEST to ask the operator for clearance access at the specified level:\n        R   - Read-only diagnostics ('show *', ping, traceroute)\n        RW  - Read/Write configuration mutations (firewall, NAT, objects)\n        RWP - Read/Write + Password Access (elevated mutations)\n      The operator enters 'grant conn-nnnn [seconds] read' or 'grant conn-nnnn [seconds] write'\n      on the netmon console.\n      Prints GRANTED when approved. Repeated calls while waiting or\n      granted reuse the existing state without prompting the console again.\n\n  ./netmon-ai-client do \"<router command>\" [\"<second router command>\" ...]\n      Executes one or more quoted router commands sequentially over the\n      existing connection. Each quoted argument is one complete command line.\n      A non-OK response stops the sequence.\n\n  ./netmon-ai-client status\n      Prints connection status, anchor PID, and idle time.\n\n  ./netmon-ai-client cancel\n      Cancels in-flight router command.\n\n  ./netmon-ai-client close\n      Sends CLOSE, closes the TCP connection, unlinks the local socket,\n      and terminates the daemon.\n\nThe daemon auto-terminates after 300 seconds of inactivity or upon TCP disconnect."},
+        {"sha256", sha256Str},
+        {"source", source}
+    };
     return res.dump(2);
 }
 
