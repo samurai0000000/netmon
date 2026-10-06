@@ -28,7 +28,7 @@ TEST(ZyxelNatCmdTest, CommandGeneratorsReturnExpectedStrings) {
     rule.mappedService = "HTTP";
     rule.active = true;
 
-    STRCMP_EQUAL("ip virtual-server HTTP_Rule interface wan1 original-ip 1.1.1.2 map-to 192.168.3.7 map-type port original-service HTTP mapped-service HTTP activate",
+    STRCMP_EQUAL("ip virtual-server HTTP_Rule interface wan1 original-ip 1.1.1.2 map-to 192.168.3.7 map-type original-service HTTP mapped-service HTTP",
                  ZyxelNatCmd::cmdAddVirtualServer(rule).c_str());
 }
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(netmon VERSION 1.0.6 LANGUAGES CXX C)
+project(netmon VERSION 1.0.7 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -83,6 +83,7 @@ set(SOURCES
     src/InstanceLock.cxx
     src/NcursesConsole.cxx
     src/AiSecurityClearance.cxx
+    src/AiSecurityClassifier.cxx
     src/UnixAuth.cxx
     src/zyxel/ZyxelScanner.cxx
     src/zyxel/ZyxelSystemCmd.cxx
@@ -91,9 +92,11 @@ set(SOURCES
     src/zyxel/ZyxelFirewallCmd.cxx
     src/zyxel/ZyxelNatCmd.cxx
     src/zyxel/ZyxelSecurityCmd.cxx
+    src/ZyxelLiveDiagnostic.cxx
 )
 
 add_executable(netmon ${SOURCES})
+target_compile_definitions(netmon PRIVATE CPPUTEST_MEM_LEAK_DETECTION_DISABLED=1)
 
 target_include_directories(netmon PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
@@ -107,6 +110,7 @@ target_include_directories(netmon PRIVATE
     ${SQLITE3_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIRS}
     ${LIBSSH2_INCLUDE_DIRS}
+    ${CPPUTEST_INCLUDE_DIRS}
 )
 
 target_link_libraries(netmon PRIVATE
@@ -118,6 +122,7 @@ target_link_libraries(netmon PRIVATE
     ${SQLITE3_LIBRARIES}
     ${OPENSSL_LIBRARIES}
     ${LIBSSH2_LIBRARIES}
+    ${CPPUTEST_LIBRARIES}
 )
 
 if(CONFIGPP_LIBRARY_DIRS)
@@ -138,6 +143,9 @@ endif()
 if(LIBSSH2_LIBRARY_DIRS)
     target_link_directories(netmon PRIVATE ${LIBSSH2_LIBRARY_DIRS})
 endif()
+if(CPPUTEST_LIBRARY_DIRS)
+    target_link_directories(netmon PRIVATE ${CPPUTEST_LIBRARY_DIRS})
+endif()
 
 # Clearance client executable
 add_executable(netmon-ai-client client/netmon-ai-client.c)
@@ -157,7 +165,9 @@ set(TEST_SOURCES
     test/TestAiSecurityClearance.cxx
     test/TestAiSecurityAdversarial.cxx
     test/TestClearanceClient.cxx
+    test/TestNetMonShell.cxx
     src/AiSecurityClearance.cxx
+    src/AiSecurityClassifier.cxx
     src/AuthManager.cxx
     src/WebServer.cxx
     src/Config.cxx
@@ -254,8 +264,10 @@ set(ZYXEL_TEST_SOURCES
     src/zyxel/ZyxelFirewallCmd.cxx
     src/zyxel/ZyxelNatCmd.cxx
     src/zyxel/ZyxelSecurityCmd.cxx
+    src/AiSecurityClassifier.cxx
     src/AuthManager.cxx
     src/Config.cxx
+    src/ZyxelLiveDiagnostic.cxx
 )
 
 add_executable(test_zyxel_driver_suite ${ZYXEL_TEST_SOURCES})

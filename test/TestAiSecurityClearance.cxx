@@ -162,6 +162,7 @@ TEST(AiSecurityClassifierTest, Level2RootShapesNominal) {
         "secure-policy insert 1",
         "no secure-policy 5",
         "no secure-policy BLOCK_RULE",
+        "no secure-policy name BLOCK_RULE",
         "ip virtual-server VS_1 interface ge1 original-ip 1.2.3.4 map-to 192.168.1.50 map-type port original-service HTTP mapped-service HTTP_LOCAL activate",
         "ip virtual-server VS_2 map-type port original-service HTTP mapped-service HTTP_LOCAL deactivate"
     };

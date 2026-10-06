@@ -79,9 +79,16 @@ public:
     virtual SshResult executeClearanceCommand(const std::string &command,
                                             std::string &outputOut,
                                             std::string &matchedPromptOut,
-                                            int timeoutMs = 5000);
+                                            int timeoutMs = 5000,
+                                            bool isDiagnostic = false);
     virtual SshResult unwindToRootPrompt();
     virtual std::string getLastMatchedPrompt() const;
+
+    // Diagnostic lock and channel isolation
+    bool acquireDiagnosticLock();
+    void releaseDiagnosticLock();
+    bool isDiagnosticActive() const;
+    ZyxelSshClient &getSshClient();
 
     // Testing and isolation helpers
     void resetForTesting();
@@ -130,10 +137,26 @@ private:
     bool                            _liveEnabled;
     bool                            _flashWriteEnabled;
     std::vector<std::string>        _dryRunLog;
+    std::atomic<bool>               _diagnosticActive;
     std::chrono::steady_clock::time_point _lastAuthFailTime;
     std::chrono::steady_clock::time_point _lastMutationTime;
     nlohmann::json                  _cachedStatus;
     ZyxelSecurityTelemetry          _securityTelemetry;
+};
+
+class ZyxelDiagnosticGuard {
+public:
+    explicit ZyxelDiagnosticGuard(ZyxelDriver &driver = ZyxelDriver::getInstance())
+        : _driver(driver), _acquired(driver.acquireDiagnosticLock()) {}
+    ~ZyxelDiagnosticGuard() {
+        if (_acquired) {
+            _driver.releaseDiagnosticLock();
+        }
+    }
+    bool isAcquired() const { return _acquired; }
+private:
+    ZyxelDriver &_driver;
+    bool _acquired;
 };
 
 #endif /* NETMON_ZYXELDRIVER_HXX */

@@ -47,11 +47,12 @@ private:
     void cmdAuthLogin(const std::string &password);
     void cmdAuthSetPassword(const std::string &currentPass, const std::string &newPass);
     void cmdAuthList();
-    void cmdRouterSetPassword();
-    void cmdRouterClearPassword();
-    void cmdRouterStatus();
-    void cmdRouterPing(const std::string &target, int count = 4);
-    void cmdRouterTraceroute(const std::string &target);
+    void cmdFirewallSetPassword();
+    void cmdFirewallClearPassword();
+    void cmdFirewallStatus();
+    void cmdFirewallPing(const std::string &target, int count = 4);
+    void cmdFirewallTraceroute(const std::string &target);
+    void cmdFirewallDiag(const std::string &mode = "read", const std::string &filter = "");
     bool isAuthenticated() const;
 
     std::atomic<bool> _running;

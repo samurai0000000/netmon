@@ -15,6 +15,7 @@
 #include "zyxel/ZyxelFirewallCmd.hxx"
 #include "zyxel/ZyxelNatCmd.hxx"
 #include "zyxel/ZyxelSecurityCmd.hxx"
+#include "AiSecurityClearance.hxx"
 
 #include <iostream>
 #include <fstream>
@@ -40,7 +41,8 @@ ZyxelDriver::ZyxelDriver()
       _authFailed(false),
       _dryRun(false),
       _liveEnabled(false),
-      _flashWriteEnabled(false) {
+      _flashWriteEnabled(false),
+      _diagnosticActive(false) {
     _journalPath = Config::resolveHomePath("~/.config/netmon/router_journal.json");
     _lastMutationTime = std::chrono::steady_clock::now();
     _lastAuthFailTime = std::chrono::steady_clock::now() - std::chrono::seconds(120);
@@ -109,6 +111,32 @@ std::vector<std::string> ZyxelDriver::getDryRunLog() const {
 void ZyxelDriver::clearDryRunLog() {
     std::lock_guard<std::mutex> lock(_dryRunMutex);
     _dryRunLog.clear();
+}
+
+bool ZyxelDriver::acquireDiagnosticLock() {
+    bool expected = false;
+    if (_diagnosticActive.compare_exchange_strong(expected, true)) {
+        std::lock_guard<std::mutex> debounceLock(_debounceMutex);
+        _pendingFlashWrite = false;
+        return true;
+    }
+    return false;
+}
+
+void ZyxelDriver::releaseDiagnosticLock() {
+    {
+        std::lock_guard<std::mutex> debounceLock(_debounceMutex);
+        _pendingFlashWrite = false;
+    }
+    _diagnosticActive.store(false);
+}
+
+bool ZyxelDriver::isDiagnosticActive() const {
+    return _diagnosticActive.load();
+}
+
+ZyxelSshClient &ZyxelDriver::getSshClient() {
+    return _sshClient;
 }
 
 void ZyxelDriver::logDryRunCommand(const std::string &cmd) {
@@ -208,6 +236,7 @@ void ZyxelDriver::resetForTesting() {
     _dryRun = false;
     _liveEnabled = false;
     _flashWriteEnabled = false;
+    _diagnosticActive = false;
     _sshClient.resetForTesting();
     _journalPath.clear();
     _journalPath.shrink_to_fit();
@@ -435,7 +464,11 @@ SshResult ZyxelDriver::executeBlockSequence(const std::string &ip,
         }
         return res;
     }
-    _sshClient.executeCommand("exit", out);
+
+    // Ensure we are in config mode for secure-policy insert
+    if (_sshClient.getLastMatchedPrompt().find("(config") == std::string::npos) {
+        _sshClient.executeCommand("configure terminal", out);
+    }
 
     // Step 2: Insert secure-policy rule at position 1
     res = _sshClient.executeCommand("secure-policy insert 1", out);
@@ -452,7 +485,23 @@ SshResult ZyxelDriver::executeBlockSequence(const std::string &ip,
         return res;
     }
 
-    res = _sshClient.executeCommand("description " + ruleName, out);
+    res = _sshClient.executeCommand("name " + ruleName, out);
+    if (res != SshResult::SUCCESS ||
+        out.find("already exists") != std::string::npos ||
+        out.find("duplicated") != std::string::npos) {
+        if (out.find("already exists") != std::string::npos ||
+            out.find("duplicated") != std::string::npos) {
+            _sshClient.unwindToRootPrompt();
+            return SshResult::SUCCESS;
+        }
+        executeRollback(sanitizedName);
+        if (ZyxelSshClient::isSyntaxError(out)) {
+            return SshResult::ERR_SYNTAX;
+        }
+        return res;
+    }
+
+    res = _sshClient.executeCommand("description " + (reason.empty() ? ruleName : reason), out);
     if (res != SshResult::SUCCESS ||
         out.find("already exists") != std::string::npos ||
         out.find("duplicated") != std::string::npos) {
@@ -486,8 +535,6 @@ SshResult ZyxelDriver::executeBlockSequence(const std::string &ip,
         if (ZyxelSshClient::isSyntaxError(out)) return SshResult::ERR_SYNTAX;
         return res;
     }
-    _sshClient.executeCommand("exit", out);
-    _sshClient.executeCommand("exit", out);
     _sshClient.unwindToRootPrompt();
 
     return SshResult::SUCCESS;
@@ -536,7 +583,6 @@ SshResult ZyxelDriver::executeUnblockSequence(const std::string &sanitizedName) 
         }
     }
 
-    _sshClient.executeCommand("exit", out);
     _sshClient.unwindToRootPrompt();
 
     return SshResult::SUCCESS;
@@ -546,6 +592,9 @@ void ZyxelDriver::executeRollback(const std::string &sanitizedName) {
     std::string objName = "NETMON_BLK_" + sanitizedName;
     std::string ruleName = "NETMON_RULE_" + sanitizedName;
     std::string out;
+    if (_sshClient.getLastMatchedPrompt().find("(config") == std::string::npos) {
+        _sshClient.executeCommand("configure terminal", out);
+    }
     _sshClient.executeCommand(ZyxelFirewallCmd::cmdDeleteRule(ruleName), out);
     _sshClient.executeCommand(ZyxelObjectCmd::cmdDeleteAddress(objName), out);
     _sshClient.unwindToRootPrompt();
@@ -563,16 +612,76 @@ void ZyxelDriver::cancelActiveCommand() {
 SshResult ZyxelDriver::executeClearanceCommand(const std::string &command,
                                               std::string &outputOut,
                                               std::string &matchedPromptOut,
-                                              int timeoutMs) {
+                                              int timeoutMs,
+                                              bool isDiagnostic) {
+    if (_diagnosticActive.load() && !isDiagnostic) {
+        outputOut = "Firewall diagnostic in progress; client requests temporarily suspended";
+        matchedPromptOut = _sshClient.getLastMatchedPrompt();
+        if (matchedPromptOut.empty()) {
+            matchedPromptOut = "Router>";
+        }
+        return SshResult::ERR_BUSY;
+    }
+
     if (isDryRun()) {
         logDryRunCommand(command);
         outputOut = "[dry-run] " + command;
         matchedPromptOut = "#";
         return SshResult::SUCCESS;
     }
+
     std::lock_guard<std::mutex> driverLock(_driverMutex);
+
+    std::string curPrompt = _sshClient.getLastMatchedPrompt();
+    int tOut = timeoutMs;
+    std::string matchedMethod;
+    LineClassification cls = AiSecurityClassifier::classify(command, curPrompt, tOut, matchedMethod);
+
+    if (cls == LineClassification::UNCLASSIFIED) {
+        outputOut = "Command rejected: UNCLASSIFIED syntax";
+        return SshResult::ERR_SYNTAX;
+    }
+
+    if (cls == LineClassification::LEVEL2_ROOT) {
+        bool enteredConfig = false;
+        if (curPrompt.find("(config") == std::string::npos) {
+            std::string cfgOut;
+            SshResult cRes = _sshClient.executeCommand("configure terminal", cfgOut, 5000);
+            if (cRes != SshResult::SUCCESS) {
+                outputOut = cfgOut;
+                matchedPromptOut = _sshClient.getLastMatchedPrompt();
+                if (cRes == SshResult::ERR_LOCKED || ZyxelSshClient::isConfigLocked(cfgOut)) {
+                    _sshClient.unwindToRootPrompt();
+                    return SshResult::ERR_LOCKED;
+                }
+                return cRes;
+            }
+            enteredConfig = true;
+        }
+
+        SshResult res = _sshClient.executeCommand(command, outputOut, timeoutMs);
+        matchedPromptOut = _sshClient.getLastMatchedPrompt();
+
+        // If command was a standalone mutation (did not open a submode like secure-policy insert)
+        // and we entered config, unwind back to Router>
+        if (enteredConfig && matchedPromptOut.find("(config-") == std::string::npos) {
+            _sshClient.unwindToRootPrompt();
+            matchedPromptOut = _sshClient.getLastMatchedPrompt();
+        }
+
+        if (res != SshResult::SUCCESS && enteredConfig) {
+            _sshClient.unwindToRootPrompt();
+            matchedPromptOut = _sshClient.getLastMatchedPrompt();
+        }
+        return res;
+    }
+
     SshResult res = _sshClient.executeCommand(command, outputOut, timeoutMs);
     matchedPromptOut = _sshClient.getLastMatchedPrompt();
+    if (res != SshResult::SUCCESS && curPrompt.find("(config") != std::string::npos) {
+        _sshClient.unwindToRootPrompt();
+        matchedPromptOut = _sshClient.getLastMatchedPrompt();
+    }
     return res;
 }
 
@@ -633,6 +742,7 @@ nlohmann::json ZyxelDriver::blockIp(const std::string &ip, const std::string &re
         logDryRunCommand("address-object " + objName + " " + ip);
         logDryRunCommand("exit");
         logDryRunCommand("secure-policy insert 1");
+        logDryRunCommand("name " + ruleName);
         logDryRunCommand("description " + ruleName);
         logDryRunCommand("action deny");
         logDryRunCommand("sourceip " + objName);
@@ -774,7 +884,7 @@ nlohmann::json ZyxelDriver::unblockIp(const std::string &ip) {
         std::string ruleName = "NETMON_RULE_" + sanitizedName;
 
         logDryRunCommand("configure terminal");
-        logDryRunCommand("no secure-policy " + ruleName);
+        logDryRunCommand(ZyxelFirewallCmd::cmdDeleteRule(ruleName));
         logDryRunCommand("no address-object " + objName);
         logDryRunCommand("exit");
 
@@ -1209,6 +1319,7 @@ bool ZyxelDriver::replayJournalUnlocked() {
                 logDryRunCommand(ZyxelObjectCmd::cmdAddAddressHost(objName, m.ip));
                 logDryRunCommand("exit");
                 logDryRunCommand("secure-policy insert 1");
+                logDryRunCommand("name " + ruleName);
                 logDryRunCommand("description " + ruleName);
                 logDryRunCommand("action deny");
                 logDryRunCommand("sourceip " + objName);
@@ -1301,7 +1412,11 @@ bool ZyxelDriver::replayJournalUnlocked() {
                 _sshClient.unwindToRootPrompt();
                 break;
             }
-            _sshClient.executeCommand("exit", out);
+
+            // Ensure in config mode for secure-policy insert
+            if (_sshClient.getLastMatchedPrompt().find("(config") == std::string::npos) {
+                _sshClient.executeCommand("configure terminal", out);
+            }
 
             res = _sshClient.executeCommand("secure-policy insert 1", out);
             if (res == SshResult::ERR_TIMEOUT ||
@@ -1324,11 +1439,24 @@ bool ZyxelDriver::replayJournalUnlocked() {
                 break;
             }
 
-            res = _sshClient.executeCommand("description " + ruleName, out);
+            res = _sshClient.executeCommand("name " + ruleName, out);
             if (out.find("already exists") != std::string::npos ||
                 out.find("duplicated") != std::string::npos) {
-                // Duplicate name after by-name delete means delete did not remove live rule.
-                // Unwind, do not delete by index, leave row as pending, stop replay and do not write.
+                _sshClient.unwindToRootPrompt();
+                stopReplayNoWrite = true;
+                break;
+            }
+            if (res != SshResult::SUCCESS) {
+                executeRollback(m.sanitizedName);
+                if (ZyxelSshClient::isSyntaxError(out)) {
+                    removeMutationFromJournal(m.id);
+                }
+                break;
+            }
+
+            res = _sshClient.executeCommand("description " + (m.reason.empty() ? ruleName : m.reason), out);
+            if (out.find("already exists") != std::string::npos ||
+                out.find("duplicated") != std::string::npos) {
                 _sshClient.unwindToRootPrompt();
                 stopReplayNoWrite = true;
                 break;
@@ -1368,8 +1496,6 @@ bool ZyxelDriver::replayJournalUnlocked() {
                 break;
             }
 
-            _sshClient.executeCommand("exit", out);
-            _sshClient.executeCommand("exit", out);
             _sshClient.unwindToRootPrompt();
 
             m.state = "applied_running";
@@ -1596,6 +1722,9 @@ void ZyxelDriver::debounceWorker() {
         }
 
         if (_pendingFlashWrite) {
+            if (_diagnosticActive.load()) {
+                continue;
+            }
             auto now = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - _lastMutationTime).count();
             if (elapsed >= 30) {
@@ -1615,6 +1744,11 @@ void ZyxelDriver::keepaliveWorker() {
         }
         if (!_running) {
             break;
+        }
+
+        // Suspend keepalives and active telemetry while diagnostic is active
+        if (_diagnosticActive.load()) {
+            continue;
         }
 
         iteration++;

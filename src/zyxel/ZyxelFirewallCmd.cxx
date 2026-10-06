@@ -50,10 +50,11 @@ std::vector<std::string> ZyxelFirewallCmd::cmdInsertRule(int position, const Zyx
 std::vector<std::string> ZyxelFirewallCmd::cmdInsertFastDeny(int position,
                                                             const std::string &ruleName,
                                                             const std::string &srcObjName,
-                                                            const std::string &/* reason */) {
+                                                            const std::string &reason) {
     std::vector<std::string> cmds;
     cmds.push_back("secure-policy insert " + std::to_string(position));
-    cmds.push_back("description " + ruleName);
+    cmds.push_back("name " + ruleName);
+    cmds.push_back("description " + (reason.empty() ? ruleName : reason));
     cmds.push_back("action deny");
     cmds.push_back("sourceip " + srcObjName);
     cmds.push_back("activate");
@@ -62,7 +63,12 @@ std::vector<std::string> ZyxelFirewallCmd::cmdInsertFastDeny(int position,
 }
 
 std::string ZyxelFirewallCmd::cmdDeleteRule(const std::string &nameOrNum) {
-    return "no secure-policy " + nameOrNum;
+    bool isAllDigits = !nameOrNum.empty() &&
+        std::all_of(nameOrNum.begin(), nameOrNum.end(), ::isdigit);
+    if (isAllDigits) {
+        return "no secure-policy " + nameOrNum;
+    }
+    return "no secure-policy name " + nameOrNum;
 }
 
 bool ZyxelFirewallCmd::parseSecurePolicy(const std::string &raw,

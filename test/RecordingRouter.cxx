@@ -111,7 +111,8 @@ void RecordingRouter::setExecutionDelayMs(int delayMs) {
 SshResult RecordingRouter::executeClearanceCommand(const std::string &command,
                                                  std::string &outputOut,
                                                  std::string &matchedPromptOut,
-                                                 int timeoutMs) {
+                                                 int timeoutMs,
+                                                 bool isDiagnostic) {
     int delay = 0;
     {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -247,8 +248,9 @@ void ZyxelDriver::cancelActiveCommand() {
 SshResult ZyxelDriver::executeClearanceCommand(const std::string &command,
                                               std::string &outputOut,
                                               std::string &matchedPromptOut,
-                                              int timeoutMs) {
-    return RecordingRouter::getInstance().executeClearanceCommand(command, outputOut, matchedPromptOut, timeoutMs);
+                                              int timeoutMs,
+                                              bool isDiagnostic) {
+    return RecordingRouter::getInstance().executeClearanceCommand(command, outputOut, matchedPromptOut, timeoutMs, isDiagnostic);
 }
 
 SshResult ZyxelDriver::unwindToRootPrompt() {
@@ -269,6 +271,11 @@ ZyxelSecurityTelemetry ZyxelDriver::getSecurityTelemetry() const {
 
 void ZyxelDriver::setSecurityTelemetryForTesting(const ZyxelSecurityTelemetry &telem) {
     (void)telem;
+}
+
+int runLiveFirewallDiagnostic(std::ostream &os, const std::string &, const std::string &) {
+    os << "Error: Firewall driver is not connected to remote host.\n";
+    return -2;
 }
 
 /*

@@ -47,7 +47,8 @@ public:
     virtual SshResult executeClearanceCommand(const std::string &command,
                                             std::string &outputOut,
                                             std::string &matchedPromptOut,
-                                            int timeoutMs = 5000) override;
+                                            int timeoutMs = 5000,
+                                            bool isDiagnostic = false) override;
     virtual SshResult unwindToRootPrompt() override;
     virtual std::string getLastMatchedPrompt() const override;
     virtual void cancelActiveCommand() override;

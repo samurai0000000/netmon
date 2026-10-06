@@ -681,9 +681,9 @@ SshResult ZyxelSshClient::unwindToRootPromptUnlocked(int maxAttempts) {
     }
 
     for (int attempt = 0; attempt < maxAttempts; ++attempt) {
-        // If current prompt is root (e.g. "Router#" or "Router>"), we are at root
+        // If current prompt is root (e.g. "Router#" or "Router>"), without any (submode)
         if (!_lastMatchedPrompt.empty() &&
-            _lastMatchedPrompt.find("(config") == std::string::npos &&
+            _lastMatchedPrompt.find('(') == std::string::npos &&
             (_lastMatchedPrompt.find('#') != std::string::npos ||
              _lastMatchedPrompt.find('>') != std::string::npos)) {
             return SshResult::SUCCESS;

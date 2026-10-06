@@ -28,14 +28,19 @@ std::string ZyxelNatCmd::cmdAddVirtualServer(const ZyxelVirtualServerRule &rule)
     if (!rule.mapToIp.empty()) {
         cmd += " map-to " + rule.mapToIp;
     }
-    cmd += " map-type port";
     if (!rule.originalService.empty()) {
-        cmd += " original-service " + rule.originalService;
+        cmd += " map-type original-service " + rule.originalService;
+        if (!rule.mappedService.empty()) {
+            cmd += " mapped-service " + rule.mappedService;
+        } else {
+            cmd += " mapped-service " + rule.originalService;
+        }
+    } else {
+        cmd += " map-type port";
     }
-    if (!rule.mappedService.empty()) {
-        cmd += " mapped-service " + rule.mappedService;
+    if (!rule.active) {
+        cmd += " deactivate";
     }
-    cmd += (rule.active ? " activate" : " deactivate");
     return cmd;
 }
 

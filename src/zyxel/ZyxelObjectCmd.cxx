@@ -152,6 +152,44 @@ bool ZyxelObjectCmd::parseAddressObjects(const std::string &raw,
         }
     }
 
+    // Token-based fallback across all lines (robust against missing/different divider lines)
+    if (out.empty()) {
+        for (const auto &line : lines) {
+            std::string trimmed = ZyxelScanner::trim(line);
+            if (trimmed.empty() || trimmed.find("====") == 0 || trimmed.find("----") == 0) {
+                continue;
+            }
+            auto tokens = ZyxelScanner::splitTokens(trimmed);
+            if (tokens.size() >= 3) {
+                std::string typeUpper = tokens[1];
+                std::transform(typeUpper.begin(), typeUpper.end(), typeUpper.begin(), ::toupper);
+                if (typeUpper == "HOST" || typeUpper == "RANGE" || typeUpper == "SUBNET" ||
+                    typeUpper == "INTERFACE" || typeUpper == "FQDN" || typeUpper == "MAC" ||
+                    typeUpper == "IPV6") {
+                    ZyxelAddressObject obj;
+                    obj.name = tokens[0];
+                    obj.type = typeUpper;
+                    std::string addr = tokens[2];
+                    size_t dashPos = addr.find('-');
+                    size_t slashPos = addr.find('/');
+                    if (dashPos != std::string::npos) {
+                        obj.ip = addr.substr(0, dashPos);
+                        obj.secondaryIpOrMask = addr.substr(dashPos + 1);
+                    } else if (slashPos != std::string::npos) {
+                        obj.ip = addr.substr(0, slashPos);
+                        obj.secondaryIpOrMask = addr.substr(slashPos + 1);
+                    } else {
+                        obj.ip = addr;
+                    }
+                    if (tokens.size() >= 4) {
+                        try { obj.refCount = std::stoi(tokens[3]); } catch (...) { obj.refCount = 0; }
+                    }
+                    out.push_back(obj);
+                }
+            }
+        }
+    }
+
     if (out.empty()) {
         ZyxelScanner::logParseError("ZyxelObjectCmd", "show address-object", 0,
                                    "No address objects found in table",

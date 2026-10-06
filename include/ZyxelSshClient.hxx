@@ -38,7 +38,8 @@ enum class SshResult {
     ERR_LOCKED,
     ERR_EXEC_FAILED,
     ERR_SYNTAX,
-    ERR_INTERRUPTED
+    ERR_INTERRUPTED,
+    ERR_BUSY
 };
 
 class ZyxelSshClient {

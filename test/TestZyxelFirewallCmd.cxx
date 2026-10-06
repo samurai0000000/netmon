@@ -16,19 +16,20 @@ TEST(ZyxelFirewallCmdTest, CommandGeneratorsReturnExpectedStrings) {
     STRCMP_EQUAL("show secure-policy", ZyxelFirewallCmd::cmdShowSecurePolicy().c_str());
     STRCMP_EQUAL("show secure-policy 11", ZyxelFirewallCmd::cmdShowSecurePolicy("11").c_str());
     STRCMP_EQUAL("no secure-policy 1", ZyxelFirewallCmd::cmdDeleteRule("1").c_str());
-    STRCMP_EQUAL("no secure-policy NETMON_RULE_1", ZyxelFirewallCmd::cmdDeleteRule("NETMON_RULE_1").c_str());
+    STRCMP_EQUAL("no secure-policy name NETMON_RULE_1", ZyxelFirewallCmd::cmdDeleteRule("NETMON_RULE_1").c_str());
 
     // Fast deny sequence
     auto fastDeny = ZyxelFirewallCmd::cmdInsertFastDeny(1, "NETMON_RULE_192_0_2_55",
                                                        "NETMON_BLK_192_0_2_55",
                                                        "Excessive WAN requests");
-    LONGS_EQUAL(6, fastDeny.size());
+    LONGS_EQUAL(7, fastDeny.size());
     STRCMP_EQUAL("secure-policy insert 1", fastDeny[0].c_str());
-    STRCMP_EQUAL("description NETMON_RULE_192_0_2_55", fastDeny[1].c_str());
-    STRCMP_EQUAL("action deny", fastDeny[2].c_str());
-    STRCMP_EQUAL("sourceip NETMON_BLK_192_0_2_55", fastDeny[3].c_str());
-    STRCMP_EQUAL("activate", fastDeny[4].c_str());
-    STRCMP_EQUAL("exit", fastDeny[5].c_str());
+    STRCMP_EQUAL("name NETMON_RULE_192_0_2_55", fastDeny[1].c_str());
+    STRCMP_EQUAL("description Excessive WAN requests", fastDeny[2].c_str());
+    STRCMP_EQUAL("action deny", fastDeny[3].c_str());
+    STRCMP_EQUAL("sourceip NETMON_BLK_192_0_2_55", fastDeny[4].c_str());
+    STRCMP_EQUAL("activate", fastDeny[5].c_str());
+    STRCMP_EQUAL("exit", fastDeny[6].c_str());
 
     // General rule insertion sequence
     ZyxelFirewallRule rule;

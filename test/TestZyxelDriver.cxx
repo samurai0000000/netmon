@@ -507,17 +507,18 @@ TEST(ZyxelDriverTest, RouterDryRunLogsExactZyShBlockSequence) {
     STRCMP_EQUAL("pending", mutations[0].state.c_str());
 
     auto log = ZyxelDriver::getInstance().getDryRunLog();
-    LONGS_EQUAL(10, log.size());
+    LONGS_EQUAL(11, log.size());
     STRCMP_EQUAL("configure terminal", log[0].c_str());
     STRCMP_EQUAL("address-object NETMON_BLK_192_0_2_55 192.0.2.55", log[1].c_str());
     STRCMP_EQUAL("exit", log[2].c_str());
     STRCMP_EQUAL("secure-policy insert 1", log[3].c_str());
-    STRCMP_EQUAL("description NETMON_RULE_192_0_2_55", log[4].c_str());
-    STRCMP_EQUAL("action deny", log[5].c_str());
-    STRCMP_EQUAL("sourceip NETMON_BLK_192_0_2_55", log[6].c_str());
-    STRCMP_EQUAL("activate", log[7].c_str());
-    STRCMP_EQUAL("exit", log[8].c_str());
+    STRCMP_EQUAL("name NETMON_RULE_192_0_2_55", log[4].c_str());
+    STRCMP_EQUAL("description NETMON_RULE_192_0_2_55", log[5].c_str());
+    STRCMP_EQUAL("action deny", log[6].c_str());
+    STRCMP_EQUAL("sourceip NETMON_BLK_192_0_2_55", log[7].c_str());
+    STRCMP_EQUAL("activate", log[8].c_str());
     STRCMP_EQUAL("exit", log[9].c_str());
+    STRCMP_EQUAL("exit", log[10].c_str());
 }
 
 TEST(ZyxelDriverTest, RouterDryRunLogsExactZyShUnblockSequence) {
@@ -537,7 +538,7 @@ TEST(ZyxelDriverTest, RouterDryRunLogsExactZyShUnblockSequence) {
     auto log = ZyxelDriver::getInstance().getDryRunLog();
     LONGS_EQUAL(4, log.size());
     STRCMP_EQUAL("configure terminal", log[0].c_str());
-    STRCMP_EQUAL("no secure-policy NETMON_RULE_192_0_2_66", log[1].c_str());
+    STRCMP_EQUAL("no secure-policy name NETMON_RULE_192_0_2_66", log[1].c_str());
     STRCMP_EQUAL("no address-object NETMON_BLK_192_0_2_66", log[2].c_str());
     STRCMP_EQUAL("exit", log[3].c_str());
 }
@@ -566,19 +567,20 @@ TEST(ZyxelDriverTest, RouterDryRunLogsFreshSessionReplayDeleteThenInsert) {
     STRCMP_EQUAL("pending", loaded[0].state.c_str());
 
     auto log = ZyxelDriver::getInstance().getDryRunLog();
-    LONGS_EQUAL(12, log.size());
+    LONGS_EQUAL(13, log.size());
     STRCMP_EQUAL("configure terminal", log[0].c_str());
-    STRCMP_EQUAL("no secure-policy NETMON_RULE_192_0_2_77", log[1].c_str());
+    STRCMP_EQUAL("no secure-policy name NETMON_RULE_192_0_2_77", log[1].c_str());
     STRCMP_EQUAL("no address-object NETMON_BLK_192_0_2_77", log[2].c_str());
     STRCMP_EQUAL("address-object NETMON_BLK_192_0_2_77 192.0.2.77", log[3].c_str());
     STRCMP_EQUAL("exit", log[4].c_str());
     STRCMP_EQUAL("secure-policy insert 1", log[5].c_str());
-    STRCMP_EQUAL("description NETMON_RULE_192_0_2_77", log[6].c_str());
-    STRCMP_EQUAL("action deny", log[7].c_str());
-    STRCMP_EQUAL("sourceip NETMON_BLK_192_0_2_77", log[8].c_str());
-    STRCMP_EQUAL("activate", log[9].c_str());
-    STRCMP_EQUAL("exit", log[10].c_str());
+    STRCMP_EQUAL("name NETMON_RULE_192_0_2_77", log[6].c_str());
+    STRCMP_EQUAL("description NETMON_RULE_192_0_2_77", log[7].c_str());
+    STRCMP_EQUAL("action deny", log[8].c_str());
+    STRCMP_EQUAL("sourceip NETMON_BLK_192_0_2_77", log[9].c_str());
+    STRCMP_EQUAL("activate", log[10].c_str());
     STRCMP_EQUAL("exit", log[11].c_str());
+    STRCMP_EQUAL("exit", log[12].c_str());
 }
 
 TEST(ZyxelDriverTest, RouterFlashWriteDisabledByDefaultDoesNotSendWriteOrPrune) {
@@ -681,6 +683,52 @@ TEST(ZyxelDriverTest, PingAndTracerouteWhenDisabledReturnsDisabled) {
 
     auto res2 = ZyxelDriver::getInstance().traceroute("1.1.1.1");
     STRCMP_EQUAL("disabled", res2["status"].get<std::string>().c_str());
+}
+
+TEST(ZyxelDriverTest, DiagnosticLockLifecycleAndExclusiveAccess) {
+    auto &driver = ZyxelDriver::getInstance();
+    CHECK_FALSE(driver.isDiagnosticActive());
+
+    CHECK_TRUE(driver.acquireDiagnosticLock());
+    CHECK_TRUE(driver.isDiagnosticActive());
+
+    // Second acquisition attempt must fail (mutual exclusion)
+    CHECK_FALSE(driver.acquireDiagnosticLock());
+
+    driver.releaseDiagnosticLock();
+    CHECK_FALSE(driver.isDiagnosticActive());
+}
+
+TEST(ZyxelDriverTest, DiagnosticGuardRaiiManagesLock) {
+    auto &driver = ZyxelDriver::getInstance();
+    CHECK_FALSE(driver.isDiagnosticActive());
+
+    {
+        ZyxelDiagnosticGuard guard(driver);
+        CHECK_TRUE(guard.isAcquired());
+        CHECK_TRUE(driver.isDiagnosticActive());
+
+        // Inner guard fails to acquire
+        ZyxelDiagnosticGuard innerGuard(driver);
+        CHECK_FALSE(innerGuard.isAcquired());
+    }
+
+    CHECK_FALSE(driver.isDiagnosticActive());
+}
+
+TEST(ZyxelDriverTest, ExecuteClearanceCommandReturnsBusyDuringDiagnostic) {
+    auto &driver = ZyxelDriver::getInstance();
+    CHECK_TRUE(driver.acquireDiagnosticLock());
+
+    std::string out;
+    std::string matchedPrompt;
+    SshResult res = driver.executeClearanceCommand("show version", out, matchedPrompt, 1000);
+
+    LONGS_EQUAL(static_cast<int>(SshResult::ERR_BUSY), static_cast<int>(res));
+    STRCMP_EQUAL("Firewall diagnostic in progress; client requests temporarily suspended", out.c_str());
+    CHECK(matchedPrompt.length() > 0);
+
+    driver.releaseDiagnosticLock();
 }
 
 /*

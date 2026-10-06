@@ -13,6 +13,7 @@
 #include "ZyxelDriver.hxx"
 #include "AiSecurityClearance.hxx"
 #include "UnixAuth.hxx"
+#include "ZyxelLiveDiagnostic.hxx"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -122,25 +123,27 @@ void NetMonShell::printBanner() const {
 
 void NetMonShell::printHelp() const {
     std::cout << "Available Commands:" << std::endl;
-    std::cout << "  status                       Show daemon, interface, and gateway status" << std::endl;
-    std::cout << "  devices [filter]             List devices (optional: known, visitor, unregistered)" << std::endl;
-    std::cout << "  unregistered                 List unregistered and visitor mobile devices" << std::endl;
+    std::cout << "  status                       Show daemon & interface status" << std::endl;
+    std::cout << "  devices [filter]             List devices (known/visitor/unregistered)" << std::endl;
+    std::cout << "  unregistered                 List unregistered and visitor devices" << std::endl;
     std::cout << "  visitors                     Alias for unregistered" << std::endl;
-    std::cout << "  toptalkers [limit] [mins]    Show top bandwidth consumers (default: 10 hosts, 15 mins)" << std::endl;
+    std::cout << "  toptalkers [limit] [mins]    Top bandwidth consumers (default: 10, 15m)" << std::endl;
     std::cout << "  traffic                      Show LAN throughput and protocol breakdown" << std::endl;
-    std::cout << "  name <mac> <name> [category] Assign friendly name and category to a device" << std::endl;
+    std::cout << "  name <mac> <name> [category] Assign friendly name & category to device" << std::endl;
     std::cout << "  reload                       Reload configuration and devices registry" << std::endl;
     std::cout << "  auth login <password>        Authenticate local operator session" << std::endl;
-    std::cout << "  auth set-password <old> <new>Change admin password (requires old password)" << std::endl;
-    std::cout << "  router status                Show router model, firmware, build date, and connection" << std::endl;
-    std::cout << "  router ping <host> [count]   Run router-side ICMP diagnostic ping (default count: 4)" << std::endl;
-    std::cout << "  router traceroute <host>     Run router-side route trace" << std::endl;
-    std::cout << "  router set-password          Store router password interactively in encrypted vault" << std::endl;
-    std::cout << "  router clear-password        Clear router password from encrypted vault" << std::endl;
-    std::cout << "  auth list                    List currently active AI security clearances and timers" << std::endl;
+    std::cout << "  auth set-password <old> <new>Change admin password" << std::endl;
+    std::cout << "  auth list                    List active AI security clearances & timers" << std::endl;
     std::cout << "  audit [limit]                Show AI security clearance audit history" << std::endl;
-    std::cout << "  grant conn-nnnn [seconds] [read|write] / approve conn-nnnn Approve pending AI clearance request (default: indefinite for read, 300s for write; requires UNIX password for all approvals)" << std::endl;
+    std::cout << "  grant conn-nnnn [sec] [tier] Approve AI clearance (requires UNIX password)" << std::endl;
     std::cout << "  deny conn-nnnn [seconds]     Deny pending AI clearance request" << std::endl;
+    std::cout << "  firewall status              Show firewall model, firmware, and connection" << std::endl;
+    std::cout << "  firewall ping <host> [count] Run firewall-side ICMP diagnostic ping" << std::endl;
+    std::cout << "  firewall traceroute <host>   Run firewall-side route trace" << std::endl;
+    std::cout << "  firewall set-password        Store firewall password in encrypted vault" << std::endl;
+    std::cout << "  firewall clear-password      Clear firewall password from encrypted vault" << std::endl;
+    std::cout << "  firewall-clear-password      Alias for firewall clear-password" << std::endl;
+    std::cout << "  firewall diag [r|w|all] [flt]Run live qualification & benchmark suite" << std::endl;
     std::cout << "  help                         Show this help message" << std::endl;
     std::cout << "  quit / exit                  Exit the shell" << std::endl;
 }
@@ -178,11 +181,10 @@ void NetMonShell::cmdDevices(const std::string &catFilter) {
     std::cout << std::left
               << std::setw(18) << "MAC Address"
               << std::setw(16) << "IP Address"
-              << std::setw(20) << "Device Name"
-              << std::setw(16) << "Category"
-              << std::setw(12) << "Last Seen"
-              << "Vendor / OUI" << std::endl;
-    std::cout << std::string(105, '-') << std::endl;
+              << std::setw(16) << "Device Name"
+              << std::setw(12) << "Category"
+              << "Last Seen" << std::endl;
+    std::cout << std::string(72, '-') << std::endl;
 
     size_t printed = 0;
     for (const auto &d : devs) {
@@ -192,17 +194,20 @@ void NetMonShell::cmdDevices(const std::string &catFilter) {
         }
 
         time_t ls = d.value("last_seen", 0);
+        std::string name = d.value("name", "");
+        if (name.length() > 15) name = name.substr(0, 12) + "...";
+        if (cat.length() > 11) cat = cat.substr(0, 9) + "...";
+
         std::cout << std::left
                   << std::setw(18) << d.value("mac", "")
                   << std::setw(16) << d.value("ip", "")
-                  << std::setw(20) << d.value("name", "")
-                  << std::setw(16) << cat
-                  << std::setw(12) << formatRelativeTime(ls)
-                  << d.value("vendor", "") << std::endl;
+                  << std::setw(16) << name
+                  << std::setw(12) << cat
+                  << formatRelativeTime(ls) << std::endl;
         printed++;
     }
 
-    std::cout << std::string(105, '-') << std::endl;
+    std::cout << std::string(72, '-') << std::endl;
     std::cout << "Total displayed: " << printed << " (Total registered: " << jsonRes.value("total_devices", 0) << ")" << std::endl;
 }
 
@@ -213,38 +218,48 @@ void NetMonShell::cmdUnregistered() {
     std::cout << std::left
               << std::setw(18) << "MAC Address"
               << std::setw(16) << "IP Address"
-              << std::setw(22) << "Device Name"
-              << std::setw(12) << "Last Seen"
+              << std::setw(18) << "Device Name"
+              << std::setw(10) << "Last Seen"
               << "Vendor" << std::endl;
-    std::cout << std::string(90, '-') << std::endl;
+    std::cout << std::string(74, '-') << std::endl;
 
     for (const auto &d : jsonRes["visitor_devices"]) {
         time_t ls = d.value("last_seen", 0);
+        std::string name = d.value("name", "");
+        if (name.length() > 17) name = name.substr(0, 14) + "...";
+        std::string vendor = d.value("vendor", "");
+        if (vendor.length() > 11) vendor = vendor.substr(0, 8) + "...";
+
         std::cout << std::left
                   << std::setw(18) << d.value("mac", "")
                   << std::setw(16) << d.value("ip", "")
-                  << std::setw(22) << d.value("name", "")
-                  << std::setw(12) << formatRelativeTime(ls)
-                  << d.value("vendor", "") << std::endl;
+                  << std::setw(18) << name
+                  << std::setw(10) << formatRelativeTime(ls)
+                  << vendor << std::endl;
     }
 
     std::cout << "\n=== Unregistered Devices (" << jsonRes.value("unregistered_count", 0) << ") ===" << std::endl;
     std::cout << std::left
               << std::setw(18) << "MAC Address"
               << std::setw(16) << "IP Address"
-              << std::setw(22) << "Assigned Name"
-              << std::setw(12) << "Last Seen"
+              << std::setw(18) << "Assigned Name"
+              << std::setw(10) << "Last Seen"
               << "Vendor" << std::endl;
-    std::cout << std::string(90, '-') << std::endl;
+    std::cout << std::string(74, '-') << std::endl;
 
     for (const auto &d : jsonRes["unregistered_devices"]) {
         time_t ls = d.value("last_seen", 0);
+        std::string name = d.value("name", "");
+        if (name.length() > 17) name = name.substr(0, 14) + "...";
+        std::string vendor = d.value("vendor", "");
+        if (vendor.length() > 11) vendor = vendor.substr(0, 8) + "...";
+
         std::cout << std::left
                   << std::setw(18) << d.value("mac", "")
                   << std::setw(16) << d.value("ip", "")
-                  << std::setw(22) << d.value("name", "")
-                  << std::setw(12) << formatRelativeTime(ls)
-                  << d.value("vendor", "") << std::endl;
+                  << std::setw(18) << name
+                  << std::setw(10) << formatRelativeTime(ls)
+                  << vendor << std::endl;
     }
 }
 
@@ -256,22 +271,21 @@ void NetMonShell::cmdTopTalkers(int limit, int windowMins) {
     std::cout << std::left
               << std::setw(18) << "MAC Address"
               << std::setw(16) << "IP Address"
-              << std::setw(20) << "Name"
-              << std::setw(14) << "Window Bytes"
-              << std::setw(14) << "Bytes Tx"
-              << std::setw(14) << "Bytes Rx"
-              << "Vendor" << std::endl;
-    std::cout << std::string(105, '-') << std::endl;
+              << std::setw(16) << "Name"
+              << std::setw(12) << "Bytes Tx"
+              << "Bytes Rx" << std::endl;
+    std::cout << std::string(72, '-') << std::endl;
 
     for (const auto &t : talkers) {
+        std::string name = t.value("name", "");
+        if (name.length() > 15) name = name.substr(0, 12) + "...";
+
         std::cout << std::left
                   << std::setw(18) << t.value("mac", "")
                   << std::setw(16) << t.value("ip", "")
-                  << std::setw(20) << t.value("name", "")
-                  << std::setw(14) << t.value("window_bytes", 0)
-                  << std::setw(14) << t.value("bytes_tx", 0)
-                  << std::setw(14) << t.value("bytes_rx", 0)
-                  << t.value("vendor", "") << std::endl;
+                  << std::setw(16) << name
+                  << std::setw(12) << t.value("bytes_tx", 0)
+                  << t.value("bytes_rx", 0) << std::endl;
     }
 }
 
@@ -387,15 +401,15 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
         } else {
             std::cout << "Usage: auth list | auth login <password> | auth set-password <current> <new>" << std::endl;
         }
-    } else if (cmd == "router") {
+    } else if (cmd == "firewall") {
         std::string subCmd;
         iss >> subCmd;
         if (subCmd == "set-password") {
-            cmdRouterSetPassword();
+            cmdFirewallSetPassword();
         } else if (subCmd == "clear-password") {
-            cmdRouterClearPassword();
+            cmdFirewallClearPassword();
         } else if (subCmd == "status") {
-            cmdRouterStatus();
+            cmdFirewallStatus();
         } else if (subCmd == "ping") {
             std::string host;
             iss >> host;
@@ -404,21 +418,36 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
                 count = 4;
             }
             if (host.empty()) {
-                std::cout << "Usage: router ping <host> [count]" << std::endl;
+                std::cout << "Usage: firewall ping <host> [count]" << std::endl;
             } else {
-                cmdRouterPing(host, count);
+                cmdFirewallPing(host, count);
             }
         } else if (subCmd == "traceroute") {
             std::string host;
             iss >> host;
             if (host.empty()) {
-                std::cout << "Usage: router traceroute <host>" << std::endl;
+                std::cout << "Usage: firewall traceroute <host>" << std::endl;
             } else {
-                cmdRouterTraceroute(host);
+                cmdFirewallTraceroute(host);
             }
+        } else if (subCmd == "diag") {
+            std::string mode = "read";
+            std::string filter;
+            std::string arg1;
+            if (iss >> arg1) {
+                if (arg1 == "read" || arg1 == "write" || arg1 == "all") {
+                    mode = arg1;
+                    iss >> filter;
+                } else {
+                    filter = arg1;
+                }
+            }
+            cmdFirewallDiag(mode, filter);
         } else {
-            std::cout << "Usage: router status | router ping <host> [count] | router traceroute <host> | router set-password | router clear-password" << std::endl;
+            std::cout << "Usage: firewall status | ping | traceroute | set-password | clear-password | diag" << std::endl;
         }
+    } else if (cmd == "firewall-clear-password") {
+        cmdFirewallClearPassword();
     } else if (cmd == "audit") {
         size_t limit = 20;
         if (iss >> limit) {
@@ -591,35 +620,35 @@ void NetMonShell::cmdAuthSetPassword(const std::string &currentPass, const std::
     }
 }
 
-void NetMonShell::cmdRouterSetPassword() {
-    std::string pass = readPasswordInteractive("Enter Zyxel router password: ");
+void NetMonShell::cmdFirewallSetPassword() {
+    std::string pass = readPasswordInteractive("Enter Zyxel firewall password: ");
     if (pass.empty()) {
-        std::cout << "Router password cannot be empty." << std::endl;
+        std::cout << "Firewall password cannot be empty." << std::endl;
         return;
     }
-    std::string confirm = readPasswordInteractive("Confirm Zyxel router password: ");
+    std::string confirm = readPasswordInteractive("Confirm Zyxel firewall password: ");
     if (pass != confirm) {
         std::cout << "Passwords do not match." << std::endl;
         return;
     }
     if (AuthManager::getInstance().setRouterPassword(pass)) {
-        std::cout << "Router password stored securely in encrypted vault (vault.enc)." << std::endl;
+        std::cout << "Firewall password stored securely in encrypted vault (vault.enc)." << std::endl;
     } else {
-        std::cout << "Error: Failed to store router password in vault." << std::endl;
+        std::cout << "Error: Failed to store firewall password in vault." << std::endl;
     }
 }
 
-void NetMonShell::cmdRouterClearPassword() {
+void NetMonShell::cmdFirewallClearPassword() {
     if (AuthManager::getInstance().clearRouterPassword()) {
-        std::cout << "Router password cleared from vault." << std::endl;
+        std::cout << "Firewall password cleared from vault." << std::endl;
     } else {
-        std::cout << "Error: Failed to clear router password from vault." << std::endl;
+        std::cout << "Error: Failed to clear firewall password from vault." << std::endl;
     }
 }
 
-void NetMonShell::cmdRouterStatus() {
+void NetMonShell::cmdFirewallStatus() {
     auto res = ZyxelDriver::getInstance().getStatus();
-    std::cout << "--- Zyxel Gateway Status ---" << std::endl;
+    std::cout << "--- Zyxel Firewall Status ---" << std::endl;
     std::cout << "Status:       " << res.value("status", "unknown") << std::endl;
     std::cout << "Driver:       " << res.value("driver", "") << std::endl;
     if (res.contains("model")) {
@@ -645,8 +674,8 @@ void NetMonShell::cmdRouterStatus() {
     }
 }
 
-void NetMonShell::cmdRouterPing(const std::string &target, int count) {
-    std::cout << "Pinging " << target << " (" << count << " packets) via Zyxel gateway (Ctrl+C to cancel)..." << std::endl;
+void NetMonShell::cmdFirewallPing(const std::string &target, int count) {
+    std::cout << "Pinging " << target << " (" << count << " packets) via Zyxel firewall (Ctrl+C to cancel)..." << std::endl;
     auto res = ZyxelDriver::getInstance().ping(target, count);
     if (res.value("status", "") == "canceled") {
         std::cout << "\n^C\nPing canceled by operator." << std::endl;
@@ -657,7 +686,7 @@ void NetMonShell::cmdRouterPing(const std::string &target, int count) {
         return;
     }
 
-    std::cout << "--- Zyxel Router Ping Probe: " << target << " ---" << std::endl;
+    std::cout << "--- Zyxel Firewall Ping Probe: " << target << " ---" << std::endl;
     std::cout << "Packets:      " << res.value("packets_transmitted", 0) << " transmitted, "
               << res.value("packets_received", 0) << " received, "
               << std::fixed << std::setprecision(1) << res.value("packet_loss_percent", 0.0) << "% loss" << std::endl;
@@ -668,8 +697,8 @@ void NetMonShell::cmdRouterPing(const std::string &target, int count) {
     }
 }
 
-void NetMonShell::cmdRouterTraceroute(const std::string &target) {
-    std::cout << "Traceroute to " << target << " via Zyxel gateway (up to 60s, Ctrl+C to cancel)..." << std::endl;
+void NetMonShell::cmdFirewallTraceroute(const std::string &target) {
+    std::cout << "Traceroute to " << target << " via Zyxel firewall (up to 60s, Ctrl+C to cancel)..." << std::endl;
     auto res = ZyxelDriver::getInstance().traceroute(target);
     if (res.value("status", "") == "canceled") {
         std::cout << "\n^C\nTraceroute canceled by operator." << std::endl;
@@ -683,12 +712,16 @@ void NetMonShell::cmdRouterTraceroute(const std::string &target) {
         return;
     }
 
-    std::cout << "--- Zyxel Router Traceroute: " << target << " ---" << std::endl;
+    std::cout << "--- Zyxel Firewall Traceroute: " << target << " ---" << std::endl;
     if (res.contains("raw_output") && !res["raw_output"].get<std::string>().empty()) {
         std::cout << res["raw_output"].get<std::string>() << std::endl;
     } else {
         std::cout << "Hops received: " << res.value("packets_received", 0) << std::endl;
     }
+}
+
+void NetMonShell::cmdFirewallDiag(const std::string &mode, const std::string &filter) {
+    runLiveFirewallDiagnostic(std::cout, mode, filter);
 }
 
 void NetMonShell::cmdAuthList() {
@@ -700,11 +733,11 @@ void NetMonShell::cmdAuthList() {
         std::cout << "  "
                   << std::left
                   << std::setw(12) << "Connection"
-                  << std::setw(24) << "Peer Address"
+                  << std::setw(22) << "Peer Address"
                   << std::setw(12) << "State"
-                  << std::setw(14) << "Expires In"
+                  << std::setw(12) << "Expires In"
                   << "Metadata" << std::endl;
-        std::cout << "  " << std::string(72, '-') << std::endl;
+        std::cout << "  " << std::string(70, '-') << std::endl;
         for (const auto &g : grants) {
             std::string stateStr;
             switch (g.clearanceState) {
@@ -724,13 +757,17 @@ void NetMonShell::cmdAuthList() {
                 expStr = "-";
             }
             std::string peer = g.peerAddress + ":" + std::to_string(g.peerPort);
+            if (peer.length() > 21) peer = peer.substr(0, 18) + "...";
+            std::string meta = g.metadata.empty() ? "-" : g.metadata;
+            if (meta.length() > 12) meta = meta.substr(0, 9) + "...";
+
             std::cout << "  "
                       << std::left
                       << std::setw(12) << g.formattedConnId
-                      << std::setw(24) << peer
+                      << std::setw(22) << peer
                       << std::setw(12) << stateStr
-                      << std::setw(14) << expStr
-                      << (g.metadata.empty() ? "-" : g.metadata) << std::endl;
+                      << std::setw(12) << expStr
+                      << meta << std::endl;
         }
     }
     std::cout << std::endl;
