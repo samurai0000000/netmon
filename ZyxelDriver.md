@@ -54,14 +54,8 @@ The driver implementation, grammar definitions, table delimiters, and PTY stream
 |                                    | MCP gateway exposes ONLY guarded tools (firewall_*).           |
 |                                    | Mutations pass through SecurityCheckpoint invariant filters.   |
 +------------------------------------+---------------------------------------------------------------+
-| Atomic Compensating Rollback       | Reverse-order LIFO compensation stack unrolls configuration   |
-|                                    | submodes and deletes dependent objects on any syntax error.   |
-+------------------------------------+---------------------------------------------------------------+
-| Flash Memory Endurance Debounce    | Quiescence debounce timer (30s) batches flash commits         |
-|                                    | ("write") to eliminate eMMC wear from high-frequency drops.   |
-+------------------------------------+---------------------------------------------------------------+
-| Durable Mutation Journaling        | router_journal.json (0600) tracks pending vs applied state.   |
-|                                    | Automatically replays uncommitted mutations on router reboot. |
+| No journal, replay, or flash save | A failed router command stops. Netmon does not keep a local   |
+|                                    | command log, replay it, or send `write`.                      |
 +------------------------------------+---------------------------------------------------------------+
 | Zero-Leak Diagnostic Logging       | Prohibits raw buffer dumps. Redacts credentials ([REDACTED]). |
 |                                    | Diagnostic line snippets capped strictly at 80 characters.    |
@@ -104,15 +98,8 @@ The driver implementation, grammar definitions, table delimiters, and PTY stream
   |                                              v                                                |
   |  +-----------------------------------------------------------------------------------------+  |
   |  |                                  ZyxelDriver (Singleton)                                |  |
-  |  |  Mutex Hierarchy: _driverMutex -> _journalMutex -> _debounceMutex -> _dryRunMutex       |  |
-  |  |                                                                                         |  |
-  |  |  +-------------------------------+             +-------------------------------------+  |  |
-  |  |  |    Mutation Journal Engine    |             |      Flash Quiescence Debounce      |  |  |
-  |  |  |     (router_journal.json)     |             |       30s Timer -> "write"          |  |  |
-  |  |  |  [pending | applied_running]  |             |      Flash Endurance Shield         |  |  |
-  |  |  +---------------+---------------+             +------------------+------------------+  |  |
-  |  |                  |                                                |                     |  |
-  |  |                  +------------------------+-----------------------+                     |  |
+  |  |  Mutex Hierarchy: _driverMutex -> _dryRunMutex                                         |  |
+  |  |  A failed command stops. No local command log, no replay, no flash save.              |  |
   |  |                                           |                                             |  |
   |  |                                           v                                             |  |
   |  |  +-----------------------------------------------------------------------------------+  |  |
@@ -186,59 +173,6 @@ The driver implementation, grammar definitions, table delimiters, and PTY stream
 
 ---
 
-### Diagram 3: Atomic Transaction & LIFO Compensating Rollback
-
-```text
-  ZyxelDriver                       ZyxelSshClient                      USG FLEX 200 Router
-       |                                   |                                     |
-       |--- 1. appendMutation(pending) --->|                                     |
-       |    (persisted in journal)         |                                     |
-       |                                   |                                     |
-       |--- 2. executeBlockSequence() ---->|                                     |
-       |                                   |--- configure terminal ------------->|
-       |                                   |<-- Router(config)# -----------------|
-       |                                   |                                     |
-       |                                   |--- address-object NETMON_BLK_IP --->|
-       |                                   |<-- Router(config)# -----------------|
-       |                                   |                                     |
-       |                                   |--- secure-policy insert 1 --------->|
-       |                                   |<-- Router(secure-policy)# ----------|
-       |                                   |                                     |
-       |                                   |--- action deny -------------------->|
-       |                                   |<-- % Syntax / Memory Error ---------|
-       |                                   |    (isSyntaxError matches)          |
-       |                                   |                                     |
-       |<-- return SshResult::ERR_SYNTAX --|                                     |
-       |                                   |                                     |
-       |=========================================================================|
-       |                  LIFO COMPENSATING ROLLBACK INITIATED                   |
-       |=========================================================================|
-       |                                   |                                     |
-       |--- 3. executeRollback() --------->|                                     |
-       |                                   |--- exit --------------------------->|
-       |                                   |<-- Router(config)# -----------------|
-       |                                   |                                     |
-       |                                   |--- no secure-policy NETMON_RULE --->|
-       |                                   |<-- Router(config)# -----------------|
-       |                                   |    (Rule deleted first: unbinds ref)|
-       |                                   |                                     |
-       |                                   |--- no address-object NETMON_BLK --->|
-       |                                   |<-- Router(config)# -----------------|
-       |                                   |    (Address object safely deleted)  |
-       |                                   |                                     |
-       |                                   |--- unwindToRootPrompt() ----------->|
-       |                                   |<-- Router# -------------------------|
-       |                                   |                                     |
-       |--- 4. purgePoisonFromJournal() -->|                                     |
-       |    (record removed from disk)     |                                     |
-       |                                   |                                     |
-       |--- 5. abortFlashWrite() --------->|                                     |
-       |    (no flash "write" issued)      |                                     |
-       v                                   v                                     v
-```
-
----
-
 ## 4. Driver Capabilities Catalog
 
 ### 4.1 System & Diagnostics (`ZyxelSystemCmd`)
@@ -251,7 +185,7 @@ The driver implementation, grammar definitions, table delimiters, and PTY stream
 | `cmdShowConnStatus()` | `show conn status` | Extracts active session count, session limits, and calculates session capacity percentage into `ZyxelSessionSummary`. |
 | `cmdPing(host, count)` | `ping <host> count <c>` | Generates active ICMP probe; parses latency (min/avg/max) and packet loss percentage into `ZyxelDiagnosticResult`. |
 | `cmdTraceroute(host)` | `traceroute <host>` | Generates hop-by-hop route tracing; parses hop metrics into `ZyxelDiagnosticResult`. |
-| `cmdWrite()` | `write` | Commits active running-configuration to persistent flash memory (debounced). |
+| `cmdWrite()` | `write` | Not sent by netmon. The router command would commit running-config to flash. |
 | `cmdReboot()` | `reboot` | Issues graceful router reboot. |
 
 ### 4.2 Interfaces & Routing (`ZyxelNetworkCmd`)
@@ -305,15 +239,13 @@ When the driver encounters unexpected stream outputs or firmware rejections, it 
 ```text
 [ZYXEL_PARSE_ERROR] class=ZyxelFirewallCmd cmd="show secure-policy" line=4 reason="Column 'Action' missing" snippet="1  Rule_Drop  WAN  LAN  [TRUNCATED]"
 [ZYXEL_CMD_REJECTED] cmd="secure-policy insert 1" error="% (after 'insert'): Parse error"
-[ZYXEL_ROLLBACK_INITIATED] trigger="Command rejection" target="NETMON_BLK_192_168_8_50"
-[ZYXEL_ROLLBACK_STEP] undo_cmd="no secure-policy NETMON_RULE_192_168_8_50" result=SUCCESS
-[ZYXEL_ROLLBACK_STEP] undo_cmd="no address-object NETMON_BLK_192_168_8_50" result=SUCCESS
-[ZYXEL_ROLLBACK_COMPLETED] status=SUCCESS unwound_to_root=true
 ```
+
+A rejected command stops. Netmon does not delete objects to undo it.
 
 To extract diagnostic anomalies from daemon logs:
 ```bash
-grep -E "\[ZYXEL_PARSE_ERROR\]|\[ZYXEL_CMD_REJECTED\]|\[ZYXEL_ROLLBACK" ~/.config/netmon/netmon.log
+grep -E "\[ZYXEL_PARSE_ERROR\]|\[ZYXEL_CMD_REJECTED\]" ~/.config/netmon/netmon.log
 ```
 
 ---

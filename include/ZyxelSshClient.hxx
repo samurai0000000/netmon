@@ -39,7 +39,29 @@ enum class SshResult {
     ERR_EXEC_FAILED,
     ERR_SYNTAX,
     ERR_INTERRUPTED,
-    ERR_BUSY
+    ERR_BUSY,
+    ERR_UNSAFE_UNWIND,
+    ERR_HOSTKEY_REJECTED,
+    ERR_REJECTED
+};
+
+enum class PromptState {
+    USER,
+    ROOT,
+    CONFIG,
+    POLICY_SUBMODE,
+    OTHER_SUBMODE,
+    UNKNOWN
+};
+
+struct ZyshTransport {
+    std::function<SshResult(const std::string &host, int port,
+                            const std::string &user, const std::string &password,
+                            std::string &hostKeySha256Out)> open;
+    std::function<ssize_t(char *buf, size_t len, bool &eofOut)> read;
+    std::function<ssize_t(const char *buf, size_t len)> write;
+    std::function<bool()> keepalive;
+    std::function<void()> close;
 };
 
 class ZyxelSshClient {
@@ -66,8 +88,15 @@ public:
 
     SshResult unwindToRootPrompt(int maxAttempts = 5);
     std::string getLastMatchedPrompt() const;
+    PromptState getPromptState() const;
+    bool policyInactiveAcknowledged() const;
     bool sendKeepalive();
     void resetForTesting();
+
+    void setTransport(ZyshTransport transport);
+    SshResult probeHostKey(std::string &sha256HexOut);
+    SshResult commitHostKeyPin(const std::string &sha256Hex);
+    static SshResult writeHostKeyPin(const std::string &path, const std::string &sha256Hex);
 
     void cancelActiveCommand();
     bool isCancelled() const;
@@ -83,7 +112,11 @@ public:
 
     // Pure parsing, transformation & sanitization utilities (testable without network)
     static std::string stripAnsiEscapes(const std::string &input);
-    static bool matchPrompt(const std::string &buffer, std::string &matchedPrompt);
+    static bool matchPrompt(const std::string &hostname,
+                            const std::string &buffer,
+                            std::string &matchedPrompt,
+                            PromptState &stateOut);
+    static bool classifyPromptLine(const std::string &buffer, PromptState &stateOut);
     static std::string stripCommandEcho(const std::string &buffer, const std::string &commandSent);
     static std::string stripTrailingPrompt(const std::string &buffer);
     static bool isConfigLocked(const std::string &buffer);
@@ -93,6 +126,12 @@ public:
 
 private:
     SshResult verifyHostKey(LIBSSH2_SESSION *session);
+    SshResult verifyPinHex(const std::string &currentHex);
+    SshResult connectTransportUnlocked(const std::string &password);
+    void disconnectUnlocked();
+    void dropSessionUnlocked();
+    bool acceptPrompt(const std::string &buffer);
+    void notePolicyAck(const std::string &command);
     SshResult drainUntilPrompt(std::string &outputOut, int timeoutMs = 5000);
     SshResult drainUntilPromptWithReader(
         const ChannelReader &reader,
@@ -116,8 +155,14 @@ private:
     LIBSSH2_CHANNEL   *_channel;
 
     std::atomic<SshClientState> _state;
+    std::string        _hostname;
     std::string        _lastMatchedPrompt;
+    PromptState        _promptState;
+    bool               _policyInactiveAck;
     std::atomic<bool>  _cancelled;
+
+    bool               _hasTransport;
+    ZyshTransport      _transport;
 };
 
 #endif /* NETMON_ZYXELSSHCLIENT_HXX */

@@ -70,7 +70,8 @@ public:
     static LineClassification classify(const std::string &line,
                                       const std::string &currentPrompt,
                                       int &timeoutMsOut,
-                                      std::string &matchedMethodOut);
+                                      std::string &matchedMethodOut,
+                                      bool policyInactiveAcked = true);
 
     static bool isControlOrChained(const std::string &line);
     static bool isNameValid(const std::string &name);
@@ -202,6 +203,7 @@ private:
 
     std::string executeDo(std::unique_lock<std::recursive_mutex> &lock, ClearanceConnection &conn, const std::string &cmdLine);
     void logAudit(const ClearanceAuditEntry &entry);
+    void logGrantRevoke(uint64_t connId, const std::string &grantType, const std::string &reason);
 
     mutable std::recursive_mutex        _mutex;
     std::string                         _bindAddress;

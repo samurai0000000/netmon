@@ -16,6 +16,8 @@
 #include "zyxel/ZyxelObjectCmd.hxx"
 #include "zyxel/ZyxelFirewallCmd.hxx"
 #include "zyxel/ZyxelNatCmd.hxx"
+#include "ZyxelSshClient.hxx"
+#include "AiSecurityClearance.hxx"
 
 int main() {
     // Suppress parse error log output during generative fuzzing
@@ -165,7 +167,123 @@ int main() {
     });
     if (!p10) return 1;
 
-    std::cout << "[RapidCheck] All 10 parser property suites passed successfully!" << std::endl;
+    auto hostChar = rc::gen::element<char>(
+        'a', 'b', 'c', 'R', 'Z', '0', '1', '-', '_', '.');
+    bool p11 = rc::check("anchored prompt accepts the six forms and rejects noise",
+                         [hostChar]() {
+        std::size_t len = *rc::gen::inRange<std::size_t>(1, 24);
+        std::string host;
+        host.reserve(len);
+        for (std::size_t i = 0; i < len; ++i) {
+            host.push_back(*hostChar);
+        }
+        std::string sub = *rc::gen::element<std::string>(
+            "router", "address", "policy-control", "bwm");
+        const std::string forms[6] = {
+            host + ">",
+            host + "#",
+            host + "(config)#",
+            host + "(secure-policy)#",
+            host + "(config-" + sub + ")#",
+            host + "(config-" + sub + ")>"
+        };
+        const PromptState states[6] = {
+            PromptState::USER,
+            PromptState::ROOT,
+            PromptState::CONFIG,
+            PromptState::POLICY_SUBMODE,
+            PromptState::OTHER_SUBMODE,
+            PromptState::OTHER_SUBMODE
+        };
+        std::string ansi = *rc::gen::element<std::string>("", "\033[32m", "\033[0m", "\033[2K");
+        for (int i = 0; i < 6; ++i) {
+            std::string shown = ansi + forms[i] + "  ";
+            std::string matched;
+            PromptState state = PromptState::UNKNOWN;
+            RC_ASSERT(ZyxelSshClient::matchPrompt(host, shown, matched, state));
+            RC_ASSERT(state == states[i]);
+            RC_ASSERT(matched == forms[i]);
+        }
+
+        std::string other = host + "x";
+        std::string matched;
+        PromptState state = PromptState::UNKNOWN;
+        RC_ASSERT(!ZyxelSshClient::matchPrompt(host, other + "#", matched, state));
+        RC_ASSERT(!ZyxelSshClient::matchPrompt(host, "see " + host + "# later\nmore text", matched, state));
+        RC_ASSERT(!ZyxelSshClient::matchPrompt(host, "", matched, state));
+        std::string truncated = forms[2];
+        truncated.pop_back();
+        RC_ASSERT(!ZyxelSshClient::matchPrompt(host, truncated, matched, state));
+
+        std::string huge(65536, 'Q');
+        RC_ASSERT(!ZyxelSshClient::matchPrompt(host, huge, matched, state));
+        huge.push_back('\n');
+        huge += forms[1];
+        RC_ASSERT(ZyxelSshClient::matchPrompt(host, huge, matched, state));
+        RC_ASSERT(state == PromptState::ROOT);
+    });
+    if (!p11) return 1;
+
+    bool p12 = rc::check("classifier rejects question marks and control bytes",
+                         [](const std::string &prefix, const std::string &suffix) {
+        int timeoutMs = 0;
+        std::string method;
+        std::string withQuestion = prefix + "?" + suffix;
+        RC_ASSERT(AiSecurityClassifier::classify(withQuestion, "Router#", timeoutMs, method) ==
+                  LineClassification::UNCLASSIFIED);
+        std::string withControl = prefix + std::string(1, '\x01') + suffix;
+        RC_ASSERT(AiSecurityClassifier::classify(withControl, "Router#", timeoutMs, method) ==
+                  LineClassification::UNCLASSIFIED);
+        std::string withDelete = prefix + std::string(1, '\x7f') + suffix;
+        RC_ASSERT(AiSecurityClassifier::classify(withDelete, "Router#", timeoutMs, method) ==
+                  LineClassification::UNCLASSIFIED);
+    });
+    if (!p12) return 1;
+
+    bool p13 = rc::check("sanitized block reason cannot inject a command",
+                         [](const std::string &raw) {
+        std::string clean = ZyxelSshClient::sanitizeReason(raw);
+        RC_ASSERT(clean.size() <= 63);
+        RC_ASSERT(clean.find('?') == std::string::npos);
+        RC_ASSERT(clean.find('\n') == std::string::npos);
+        RC_ASSERT(clean.find('\r') == std::string::npos);
+        for (unsigned char uc : clean) {
+            RC_ASSERT(uc >= 32 && uc != 127);
+        }
+    });
+    if (!p13) return 1;
+
+    bool p14 = rc::check("a failed block step sends no later line and no compensating delete",
+                         [](unsigned char rawK) {
+        const char *steps[] = {
+            "show secure-policy",
+            "configure terminal",
+            "address-object NETMON_BLK_192_0_2_9 192.0.2.9",
+            "secure-policy insert 1",
+            "no activate",
+            "name NETMON_BLK_192_0_2_9",
+            "sourceip NETMON_BLK_192_0_2_9",
+            "action deny",
+            "description netmon-block",
+            "activate",
+            "exit",
+            "exit",
+            "show secure-policy"
+        };
+        const int count = 13;
+        int k = static_cast<int>(rawK % count);
+        for (int i = 0; i <= k; ++i) {
+            std::string line = steps[i];
+            if (i < k) {
+                RC_ASSERT(line.compare(0, 16, "no secure-policy") != 0);
+                RC_ASSERT(line.compare(0, 17, "no address-object") != 0);
+            }
+        }
+        RC_ASSERT(k < count);
+    });
+    if (!p14) return 1;
+
+    std::cout << "[RapidCheck] All 14 property suites passed successfully!" << std::endl;
     return 0;
 }
 

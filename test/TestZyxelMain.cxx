@@ -61,7 +61,8 @@ int main(int argc, char **argv) {
 
     {
         std::string warmupPrompt;
-        ZyxelSshClient::matchPrompt("Router#", warmupPrompt);
+        PromptState warmupState = PromptState::UNKNOWN;
+        ZyxelSshClient::matchPrompt("Router", "Router#", warmupPrompt, warmupState);
         ZyxelSshClient::stripAnsiEscapes("\033[32mwarmup\033[0m");
         ZyxelSshClient::stripCommandEcho("warmup\r\noutput", "warmup");
         ZyxelSshClient::stripTrailingPrompt("Router#");

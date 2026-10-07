@@ -73,6 +73,17 @@ TEST(ApprovalQueue, DryRunDoesNotCallRouter) {
     CHECK_EQUAL(0, SecurityCheckpoint::getInstance().getPendingTickets().size());
 }
 
+TEST(ApprovalQueue, LiveModeDoesNotTouchRouter) {
+    SecurityCheckpoint::getInstance().setPolicyMode(PolicyMode::Live);
+    nlohmann::json payload = {{"ip", "192.0.2.150"}, {"reason", "live ticket"}};
+    nlohmann::json res = SecurityCheckpoint::getInstance().handleAgentMutation("firewall_block_ip", "ai_agent", payload);
+
+    CHECK_EQUAL(std::string("pending"), res.value("status", ""));
+    CHECK_TRUE(res.contains("ticket_id"));
+    CHECK_EQUAL(0, RecordingRouter::getInstance().getCallCount());
+    CHECK_EQUAL(1, SecurityCheckpoint::getInstance().getPendingTickets().size());
+}
+
 TEST(ApprovalQueue, EnqueueStoresCanonicalPayload) {
     SecurityCheckpoint::getInstance().setPolicyMode(PolicyMode::RequireApproval);
     nlohmann::json payload = {{"ip", "192.168.1.152"}, {"reason", "port scanner"}, {"extra", 42}};

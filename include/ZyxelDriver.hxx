@@ -14,20 +14,9 @@
 #include <string>
 #include <vector>
 #include <mutex>
-#include <condition_variable>
 #include <thread>
 #include <atomic>
 #include <chrono>
-
-struct RouterMutation {
-    std::string id;
-    std::string op;             // "block" or "unblock"
-    std::string ip;
-    std::string sanitizedName;  // e.g. "192_168_8_50"
-    std::string reason;
-    std::string state;          // "pending" or "applied_running"
-    time_t      timestamp;
-};
 
 class ZyxelDriver : public RouterDriver {
 public:
@@ -39,9 +28,6 @@ public:
     void configure(const std::string &host, int port,
                    const std::string &user,
                    const std::string &pinPath = "");
-
-    void setJournalPath(const std::string &path);
-    std::string getJournalPath() const;
 
     void start();
     void stop();
@@ -65,14 +51,10 @@ public:
     void setDryRun(bool enable);
     bool isLiveEnabled() const;
     void setLiveEnabled(bool enable);
-    bool isFlashWriteEnabled() const;
-    void setFlashWriteEnabled(bool enable);
 
     std::vector<std::string> getDryRunLog() const;
     void clearDryRunLog();
 
-    bool replayJournal();
-    void flushFlashWrite();
     void clearAuthFailure();
     virtual void cancelActiveCommand();
 
@@ -82,64 +64,53 @@ public:
                                             int timeoutMs = 5000,
                                             bool isDiagnostic = false);
     virtual SshResult unwindToRootPrompt();
+    SshResult abandonPolicySubmode();
     virtual std::string getLastMatchedPrompt() const;
+    std::string startupAlert() const;
 
     // Diagnostic lock and channel isolation
     bool acquireDiagnosticLock();
     void releaseDiagnosticLock();
     bool isDiagnosticActive() const;
     ZyxelSshClient &getSshClient();
+    SshResult sendDiagnosticLine(const std::string &line,
+                                 std::string &outputOut,
+                                 int timeoutMs = 5000);
 
     // Testing and isolation helpers
     void resetForTesting();
-    std::vector<RouterMutation> getPendingMutationsForTesting() const;
-    bool removeMutationForTesting(const std::string &id);
-    bool addMutationForTesting(const RouterMutation &m);
-    bool saveJournalForTesting(const std::vector<RouterMutation> &mutations, bool dirty);
-    bool loadJournalForTesting(std::vector<RouterMutation> &mutations, bool &dirty) const;
 
 private:
-    void debounceWorker();
     void keepaliveWorker();
 
     bool ensureConnectedUnlocked();
-    bool replayJournalUnlocked();
     void logDryRunCommand(const std::string &cmd);
+    SshResult transmitLine(const std::string &line, std::string &outputOut, int timeoutMs = 5000);
 
-    bool loadJournal(std::vector<RouterMutation> &mutations, bool &dirty) const;
-    bool saveJournal(const std::vector<RouterMutation> &mutations, bool dirty) const;
-    bool appendMutationToJournal(const RouterMutation &m);
-    bool removeMutationFromJournal(const std::string &id);
-    bool clearJournal();
-
-    SshResult executeBlockSequence(const std::string &ip, const std::string &sanitizedName, const std::string &reason);
-    SshResult executeUnblockSequence(const std::string &sanitizedName);
-    void executeRollback(const std::string &sanitizedName);
+    SshResult executeBlockSequence(const std::string &ip, const std::string &objName,
+                                   const std::string &reason, std::string &stepOut,
+                                   std::string &outputOut, std::string &showOut);
+    SshResult executeUnblockSequence(const std::string &objName, std::string &stepOut,
+                                     std::string &outputOut, std::string &showOut);
+    void scanAllowAnyUnlocked();
 
     mutable std::mutex              _driverMutex;
-    mutable std::mutex              _journalMutex;
-    mutable std::mutex              _debounceMutex;
     mutable std::mutex              _dryRunMutex;
     mutable std::mutex              _telemetryMutex;
 
-    std::condition_variable         _debounceCv;
     std::atomic<bool>               _running;
-    std::thread                     _debounceThread;
     std::thread                     _keepaliveThread;
 
-    std::string                     _journalPath;
     ZyxelSshClient                  _sshClient;
 
     bool                            _configured;
-    bool                            _pendingFlashWrite;
     bool                            _authFailed;
     bool                            _dryRun;
     bool                            _liveEnabled;
-    bool                            _flashWriteEnabled;
     std::vector<std::string>        _dryRunLog;
+    std::string                     _startupAlert;
     std::atomic<bool>               _diagnosticActive;
     std::chrono::steady_clock::time_point _lastAuthFailTime;
-    std::chrono::steady_clock::time_point _lastMutationTime;
     nlohmann::json                  _cachedStatus;
     ZyxelSecurityTelemetry          _securityTelemetry;
 };

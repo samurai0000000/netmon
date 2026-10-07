@@ -30,7 +30,7 @@ Config::Config()
     , _allowAiRawExec(false)
     , _routerDryRun(false)
     , _routerLiveEnabled(false)
-    , _routerFlashWrite(false)
+    , _routerBlockPosition(1)
     , _snmpPollIntervalSec(30)
     , _databaseFile("~/.config/netmon/netmon_telemetry.db")
     , _auditFile()
@@ -58,7 +58,7 @@ void Config::resetForTesting() {
     _routerKeyPath.shrink_to_fit();
     _routerDryRun = false;
     _routerLiveEnabled = false;
-    _routerFlashWrite = false;
+    _routerBlockPosition = 1;
     _snmpPollIntervalSec = 30;
     _snmpTargets.clear();
     _snmpTargets.shrink_to_fit();
@@ -129,12 +129,22 @@ bool Config::load(const std::string &customPath) {
         cfg.lookupValue("router_key_path", _routerKeyPath);
         cfg.lookupValue("router_dry_run", _routerDryRun);
         cfg.lookupValue("router_live_enabled", _routerLiveEnabled);
-        cfg.lookupValue("router_flash_write", _routerFlashWrite);
+        cfg.lookupValue("router_block_position", _routerBlockPosition);
+        if (_routerBlockPosition < 1) {
+            std::cerr << "WARNING: ignoring router_block_position below 1" << std::endl;
+            _routerBlockPosition = 1;
+        }
         cfg.lookupValue("database_file", _databaseFile);
         cfg.lookupValue("audit_file", _auditFile);
         cfg.lookupValue("raw_retention_days", _rawRetentionDays);
     } catch (const libconfig::SettingNotFoundException &) {
         // Some settings were missing, keep defaults
+    }
+
+    if (cfg.exists("router_flash_write")) {
+        std::cerr << "WARNING: ignoring router_flash_write in " << _configPath
+                  << "; netmon does not save the router configuration"
+                  << std::endl;
     }
 
     // Security section
@@ -363,12 +373,6 @@ bool Config::save() {
             root["router_live_enabled"] = _routerLiveEnabled;
         }
 
-        if (!root.exists("router_flash_write")) {
-            root.add("router_flash_write", libconfig::Setting::TypeBoolean) = _routerFlashWrite;
-        } else {
-            root["router_flash_write"] = _routerFlashWrite;
-        }
-
         const std::string &auditToSave = getAuditFile();
         if (!root.exists("audit_file")) {
             root.add("audit_file", libconfig::Setting::TypeString) = auditToSave;
@@ -549,16 +553,16 @@ bool Config::getRouterLiveEnabled() const {
     return _routerLiveEnabled;
 }
 
+int Config::getRouterBlockPosition() const {
+    return _routerBlockPosition;
+}
+
+void Config::setRouterBlockPosition(int position) {
+    _routerBlockPosition = position < 1 ? 1 : position;
+}
+
 void Config::setRouterLiveEnabled(bool enable) {
     _routerLiveEnabled = enable;
-}
-
-bool Config::getRouterFlashWrite() const {
-    return _routerFlashWrite;
-}
-
-void Config::setRouterFlashWrite(bool enable) {
-    _routerFlashWrite = enable;
 }
 
 const std::string &Config::getAuditFile() const {

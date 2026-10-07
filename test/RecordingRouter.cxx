@@ -170,8 +170,10 @@ std::string RecordingRouter::getLastMatchedPrompt() const {
 ZyxelDriver::ZyxelDriver()
     : _running(false),
       _configured(true),
-      _pendingFlashWrite(false),
-      _authFailed(false) {
+      _authFailed(false),
+      _dryRun(false),
+      _liveEnabled(false),
+      _diagnosticActive(false) {
 }
 
 ZyxelDriver::~ZyxelDriver() {
@@ -257,8 +259,17 @@ SshResult ZyxelDriver::unwindToRootPrompt() {
     return RecordingRouter::getInstance().unwindToRootPrompt();
 }
 
+SshResult ZyxelDriver::abandonPolicySubmode() {
+    return SshResult::ERR_EXEC_FAILED;
+}
+
 std::string ZyxelDriver::getLastMatchedPrompt() const {
     return RecordingRouter::getInstance().getLastMatchedPrompt();
+}
+
+ZyxelSshClient &ZyxelDriver::getSshClient() {
+    static ZyxelSshClient client;
+    return client;
 }
 
 nlohmann::json ZyxelDriver::getSecurityMetrics() {

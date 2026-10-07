@@ -101,9 +101,8 @@ public:
 
     bool getRouterLiveEnabled() const;
     void setRouterLiveEnabled(bool enable);
-
-    bool getRouterFlashWrite() const;
-    void setRouterFlashWrite(bool enable);
+    int getRouterBlockPosition() const;
+    void setRouterBlockPosition(int position);
 
     const std::string &getConfigPath() const;
     static std::string resolveHomePath(const std::string &path);
@@ -128,7 +127,7 @@ private:
     std::string _routerKeyPath;
     bool        _routerDryRun;
     bool        _routerLiveEnabled;
-    bool        _routerFlashWrite;
+    int         _routerBlockPosition;
 
     int         _snmpPollIntervalSec;
     std::vector<SnmpTargetConfig> _snmpTargets;

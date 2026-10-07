@@ -87,13 +87,20 @@ TEST(NetMonShellTest, FirewallCommandsDispatchedNominally) {
 }
 
 TEST(NetMonShellTest, FirewallDiagRejectsWhenNotConfiguredOrNotConnected) {
-    buffer.str("");
-    int ret = NetMonShell::getInstance().executeCommand("firewall diag read");
-    // When offline, executes cleanly and emits connection error to stdout
-    CHECK_EQUAL(0, ret);
-    std::string out = buffer.str();
-    CHECK_TRUE(out.find("Firewall driver is not") != std::string::npos);
-    assertAllLinesWithinLimit(out, 76);
+    const char *cmds[] = {
+        "firewall diag read",
+        "firewall diag write",
+        "firewall diag all",
+        "firewall diag e4"
+    };
+    for (const char *cmd : cmds) {
+        buffer.str("");
+        int ret = NetMonShell::getInstance().executeCommand(cmd);
+        CHECK_EQUAL(0, ret);
+        std::string out = buffer.str();
+        CHECK_TRUE(out.find("Firewall driver is not") != std::string::npos);
+        assertAllLinesWithinLimit(out, 76);
+    }
 }
 
 TEST(NetMonShellTest, AuthListConformsTo80x24Rule) {

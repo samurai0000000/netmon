@@ -5,12 +5,34 @@
  */
 
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <cstring>
+#include <filesystem>
 
 #include "ZyxelSshClient.hxx"
+#include "ZyshSimulator.hxx"
+#include "ZyxelDriver.hxx"
+#include "AuthManager.hxx"
 #include <CppUTest/TestHarness.h>
+
+namespace fs = std::filesystem;
+
+static const char *kPinHex =
+    "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+static SshResult connectPinned(ZyxelSshClient &client, ZyshSimulator &sim,
+                               const std::string &pinPath) {
+    sim.setHostKey(kPinHex);
+    fs::remove(pinPath);
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(ZyxelSshClient::writeHostKeyPin(pinPath, kPinHex)));
+    client.resetForTesting();
+    client.configure("192.0.2.1", 22, "admin", pinPath);
+    client.setTransport(sim.transport());
+    return client.connect("router-test-pass");
+}
 
 TEST_GROUP(ZyxelSshClientTest) {
     void setup() {
@@ -29,42 +51,44 @@ TEST(ZyxelSshClientTest, InitialStateIsDisconnected) {
 
 TEST(ZyxelSshClientTest, TailPromptRegexMatching) {
     std::string prompt;
+    PromptState state = PromptState::UNKNOWN;
 
-    // Standard user exec
-    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router>", prompt));
+    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router", "Router>", prompt, state));
     STRCMP_EQUAL("Router>", prompt.c_str());
+    CHECK_EQUAL(static_cast<int>(PromptState::USER), static_cast<int>(state));
 
-    // Standard privileged exec
-    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router#", prompt));
+    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router", "Router#", prompt, state));
     STRCMP_EQUAL("Router#", prompt.c_str());
+    CHECK_EQUAL(static_cast<int>(PromptState::ROOT), static_cast<int>(state));
 
-    // Config mode
-    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router(config)#", prompt));
+    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router", "Router(config)#", prompt, state));
     STRCMP_EQUAL("Router(config)#", prompt.c_str());
+    CHECK_EQUAL(static_cast<int>(PromptState::CONFIG), static_cast<int>(state));
 
-    // Submode (policy-control)
-    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router(config-policy-control)#", prompt));
+    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router", "Router(secure-policy)#", prompt, state));
+    STRCMP_EQUAL("Router(secure-policy)#", prompt.c_str());
+    CHECK_EQUAL(static_cast<int>(PromptState::POLICY_SUBMODE), static_cast<int>(state));
+
+    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router", "Router(config-policy-control)#", prompt, state));
     STRCMP_EQUAL("Router(config-policy-control)#", prompt.c_str());
+    CHECK_EQUAL(static_cast<int>(PromptState::OTHER_SUBMODE), static_cast<int>(state));
 
-    // Submode (address object)
-    CHECK_TRUE(ZyxelSshClient::matchPrompt("usg-flex-200(config-address)#", prompt));
+    CHECK_TRUE(ZyxelSshClient::matchPrompt("usg-flex-200", "usg-flex-200(config-address)#", prompt, state));
     STRCMP_EQUAL("usg-flex-200(config-address)#", prompt.c_str());
 
-    // Multiline command output ending with prompt
     std::string output = "Building configuration...\n[OK]\nRouter(config)# ";
-    CHECK_TRUE(ZyxelSshClient::matchPrompt(output, prompt));
+    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router", output, prompt, state));
 }
 
 TEST(ZyxelSshClientTest, PromptRegexDoesNotMatchMidBuffer) {
     std::string prompt;
+    PromptState state = PromptState::UNKNOWN;
 
-    // Mid-buffer prompt in description text with trailing lines
     std::string midBuffer = "description \"Check host Router#1\"\nStatus: active\nPackets: 450";
-    CHECK_FALSE(ZyxelSshClient::matchPrompt(midBuffer, prompt));
+    CHECK_FALSE(ZyxelSshClient::matchPrompt("Router", midBuffer, prompt, state));
 
-    // Greater-than in throughput log
     std::string logLine = "Throughput: eth0 > 1000 Mbps\nAnalyzing stream...";
-    CHECK_FALSE(ZyxelSshClient::matchPrompt(logLine, prompt));
+    CHECK_FALSE(ZyxelSshClient::matchPrompt("Router", logLine, prompt, state));
 }
 
 TEST(ZyxelSshClientTest, AnsiEscapeStripping) {
@@ -105,10 +129,10 @@ TEST(ZyxelSshClientTest, SanitizeReasonFilter) {
     std::string sanitized = ZyxelSshClient::sanitizeReason(dirty);
     STRCMP_EQUAL("Blocked reboot echo whoami VAR test", sanitized.c_str());
 
-    // Length capping at 64 characters
+    // Length capping at 63 characters
     std::string longReason(100, 'A');
     std::string capped = ZyxelSshClient::sanitizeReason(longReason);
-    LONGS_EQUAL(64, capped.size());
+    LONGS_EQUAL(63, capped.size());
 }
 
 TEST(ZyxelSshClientTest, SanitizeIpToObjectName) {
@@ -300,7 +324,9 @@ TEST(ZyxelSshClientTest, DrainUntilPromptHandlesCancellation) {
     std::string out;
     SshResult res = client.drainUntilPromptForTesting(reader, writer, out, 500);
     CHECK_EQUAL(static_cast<int>(SshResult::ERR_INTERRUPTED), static_cast<int>(res));
-    STRCMP_EQUAL("\x03\n", writtenData.c_str());
+    CHECK_EQUAL(0, static_cast<int>(writtenData.size()));
+    CHECK_EQUAL(static_cast<int>(SshClientState::DISCONNECTED),
+                static_cast<int>(client.getState()));
 }
 
 TEST(ZyxelSshClientTest, DrainUntilPromptHandlesAnsiMorePagination) {
@@ -340,6 +366,230 @@ TEST(ZyxelSshClientTest, DrainUntilPromptHandlesAnsiMorePagination) {
     CHECK_TRUE(out.find("Line 3") != std::string::npos);
     CHECK_TRUE(out.find("Line 4") != std::string::npos);
     CHECK_TRUE(out.find("--More--") == std::string::npos);
+}
+
+TEST_GROUP(ZyxelSshClientSession) {
+    std::string pinPath = "test_data/ssh_session/router_hostkey.pin";
+
+    void setup() {
+        fs::create_directories("test_data/ssh_session");
+        fs::remove(pinPath);
+    }
+
+    void teardown() {
+        fs::remove(pinPath);
+    }
+};
+
+TEST(ZyxelSshClientSession, TimeoutDisconnects) {
+    ZyshSimulator sim;
+    ZyxelSshClient client;
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(connectPinned(client, sim, pinPath)));
+    int closes = sim.closeCount();
+    sim.setStall(true);
+    std::string out;
+    SshResult res = client.executeCommand("show version", out, 150);
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_TIMEOUT), static_cast<int>(res));
+    CHECK_FALSE(client.isConnected());
+    CHECK_EQUAL(static_cast<int>(SshClientState::DISCONNECTED),
+                static_cast<int>(client.getState()));
+    CHECK_EQUAL(static_cast<int>(PromptState::UNKNOWN),
+                static_cast<int>(client.getPromptState()));
+    CHECK_TRUE(sim.closeCount() > closes);
+}
+
+TEST(ZyxelSshClientSession, ReadErrorDisconnects) {
+    ZyshSimulator sim;
+    ZyxelSshClient client;
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(connectPinned(client, sim, pinPath)));
+    sim.setReadErrorOnNext(true);
+    std::string out;
+    SshResult res = client.executeCommand("show version", out, 1000);
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_CHANNEL_FAILED), static_cast<int>(res));
+    CHECK_FALSE(client.isConnected());
+    CHECK_EQUAL(static_cast<int>(PromptState::UNKNOWN),
+                static_cast<int>(client.getPromptState()));
+}
+
+TEST(ZyxelSshClientSession, ReconnectAfterRouterReboot) {
+    ZyshSimulator sim;
+    ZyxelSshClient client;
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(connectPinned(client, sim, pinPath)));
+    sim.setEofOnNextRead(true);
+    std::string out;
+    SshResult dropped = client.executeCommand("show version", out, 1000);
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_CHANNEL_FAILED), static_cast<int>(dropped));
+    CHECK_FALSE(client.isConnected());
+
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(client.connect("router-test-pass")));
+    SshResult again = client.executeCommand("show version", out, 1000);
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(again));
+    CHECK_TRUE(out.find("model ZyWALL") != std::string::npos);
+    CHECK_TRUE(client.isConnected());
+}
+
+TEST(ZyxelSshClientSession, LateOutputDoesNotLeakIntoNextCommand) {
+    ZyshSimulator sim;
+    ZyxelSshClient client;
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(connectPinned(client, sim, pinPath)));
+    sim.armLateOutput("LATE_MARKER\nRouter#");
+    std::string out;
+    SshResult timed = client.executeCommand("show version", out, 150);
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_TIMEOUT), static_cast<int>(timed));
+    CHECK_FALSE(client.isConnected());
+    CHECK_FALSE(sim.lateDelivered());
+
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(client.connect("router-test-pass")));
+    SshResult again = client.executeCommand("show version", out, 1000);
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(again));
+    CHECK_TRUE(out.find("LATE_MARKER") == std::string::npos);
+    CHECK_TRUE(out.find("model ZyWALL") != std::string::npos);
+    CHECK_FALSE(sim.lateDelivered());
+}
+
+TEST(ZyxelSshClientSession, KeepaliveFailureDisconnects) {
+    ZyshSimulator sim;
+    ZyxelSshClient client;
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(connectPinned(client, sim, pinPath)));
+    sim.setKeepaliveFail(true);
+    CHECK_FALSE(client.sendKeepalive());
+    CHECK_FALSE(client.isConnected());
+    CHECK_EQUAL(static_cast<int>(SshClientState::DISCONNECTED),
+                static_cast<int>(client.getState()));
+}
+
+TEST(ZyxelSshClientSession, EmptyPinRejected) {
+    ZyshSimulator sim;
+    ZyxelSshClient client;
+    client.resetForTesting();
+    client.configure("192.0.2.1", 22, "admin");
+    client.setTransport(sim.transport());
+    int opens = sim.openCount();
+    SshResult res = client.connect("router-test-pass");
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_HOSTKEY_REJECTED), static_cast<int>(res));
+    CHECK_EQUAL(opens, sim.openCount());
+    CHECK_FALSE(client.isConnected());
+}
+
+TEST(ZyxelSshClientSession, PinWriteFailureRejected) {
+    std::string parent = "test_data/ssh_session/not_a_directory";
+    std::ofstream file(parent);
+    file << "x";
+    file.close();
+    std::string bad = parent + "/router_hostkey.pin";
+    SshResult res = ZyxelSshClient::writeHostKeyPin(bad, kPinHex);
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_HOSTKEY_REJECTED), static_cast<int>(res));
+    fs::remove(parent);
+}
+
+TEST(ZyxelSshClientSession, PromptFromOtherHostRejected) {
+    std::string prompt;
+    PromptState state = PromptState::UNKNOWN;
+    CHECK_FALSE(ZyxelSshClient::matchPrompt("Router", "Other#", prompt, state));
+    CHECK_EQUAL(static_cast<int>(PromptState::UNKNOWN), static_cast<int>(state));
+    CHECK_TRUE(ZyxelSshClient::matchPrompt("Router", "\033[32mRouter#", prompt, state));
+    CHECK_EQUAL(static_cast<int>(PromptState::ROOT), static_cast<int>(state));
+    CHECK_FALSE(ZyxelSshClient::matchPrompt("Router", "see Router# in the middle\nmore", prompt, state));
+}
+
+TEST(ZyxelSshClientSession, HostKeyChangeDisconnects) {
+    ZyshSimulator sim;
+    ZyxelSshClient client;
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(connectPinned(client, sim, pinPath)));
+    client.disconnect();
+    sim.setNextHostKey("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    SshResult res = client.connect("router-test-pass");
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_HOSTKEY_MISMATCH), static_cast<int>(res));
+    CHECK_FALSE(client.isConnected());
+}
+
+TEST(ZyxelSshClientSession, UnwindRefusesInActivePolicySubmode) {
+    ZyshSimulator sim;
+    ZyxelSshClient client;
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(connectPinned(client, sim, pinPath)));
+    std::string out;
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(client.executeCommand("configure terminal", out, 1000)));
+    CHECK_EQUAL(static_cast<int>(PromptState::CONFIG),
+                static_cast<int>(client.getPromptState()));
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(client.executeCommand("secure-policy insert 1", out, 1000)));
+    CHECK_EQUAL(static_cast<int>(PromptState::POLICY_SUBMODE),
+                static_cast<int>(client.getPromptState()));
+    size_t linesBefore = sim.lines().size();
+    SshResult refused = client.unwindToRootPrompt();
+    CHECK_EQUAL(static_cast<int>(SshResult::ERR_UNSAFE_UNWIND), static_cast<int>(refused));
+    CHECK_EQUAL(linesBefore, sim.lines().size());
+    for (const auto &line : sim.lines()) {
+        CHECK_TRUE(line != "exit");
+    }
+
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(client.executeCommand("no activate", out, 1000)));
+    SshResult unwound = client.unwindToRootPrompt();
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(unwound));
+    CHECK_EQUAL(static_cast<int>(PromptState::ROOT),
+                static_cast<int>(client.getPromptState()));
+}
+
+TEST_GROUP(Integration_ZyshReconnect) {
+    std::string pinPath = "test_data/ssh_reconnect/router_hostkey.pin";
+    std::string vaultDir = "test_data/ssh_reconnect/vault";
+    ZyshSimulator *sim = nullptr;
+
+    void setup() {
+        ZyxelDriver::getInstance().resetForTesting();
+        AuthManager::getInstance().resetForTesting();
+        fs::create_directories(vaultDir);
+        fs::remove(pinPath);
+        AuthManager::getInstance().setVaultDir(vaultDir);
+        sim = new ZyshSimulator();
+    }
+
+    void teardown() {
+        ZyxelDriver::getInstance().resetForTesting();
+        delete sim;
+        sim = nullptr;
+        AuthManager::getInstance().resetForTesting();
+        fs::remove_all("test_data/ssh_reconnect");
+    }
+};
+
+TEST(Integration_ZyshReconnect, ClearanceReconnectsAfterRouterDrop) {
+    sim->setHostKey(kPinHex);
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS),
+                static_cast<int>(ZyxelSshClient::writeHostKeyPin(pinPath, kPinHex)));
+    CHECK_TRUE(AuthManager::getInstance().setRouterPassword("router-test-pass"));
+
+    ZyxelDriver &driver = ZyxelDriver::getInstance();
+    driver.setLiveEnabled(true);
+    driver.configure("192.0.2.1", 22, "admin", pinPath);
+    driver.getSshClient().setTransport(sim->transport());
+
+    std::string out;
+    std::string prompt;
+    SshResult first = driver.executeClearanceCommand("show version", out, prompt, 1000);
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(first));
+    CHECK_TRUE(out.find("model ZyWALL") != std::string::npos);
+
+    sim->setEofOnNextRead(true);
+    SshResult dropped = driver.executeClearanceCommand("show version", out, prompt, 1000);
+    CHECK_TRUE(dropped != SshResult::SUCCESS);
+    CHECK_FALSE(driver.isConnected());
+
+    SshResult again = driver.executeClearanceCommand("show version", out, prompt, 1000);
+    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(again));
+    CHECK_TRUE(out.find("model ZyWALL") != std::string::npos);
+    CHECK_TRUE(out.find("LATE_MARKER") == std::string::npos);
 }
 
 /*

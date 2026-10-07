@@ -27,6 +27,7 @@ public:
 
     bool isExecutingCommand() const;
     void cancelCurrentCommand();
+    int storeFirewallPassword(const std::string &password);
 
 private:
     NetMonShell();
@@ -47,6 +48,7 @@ private:
     void cmdAuthLogin(const std::string &password);
     void cmdAuthSetPassword(const std::string &currentPass, const std::string &newPass);
     void cmdAuthList();
+    void cmdFirewallPinHostkey();
     void cmdFirewallSetPassword();
     void cmdFirewallClearPassword();
     void cmdFirewallStatus();

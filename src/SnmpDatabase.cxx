@@ -63,18 +63,7 @@ bool SnmpDatabase::open(const std::string &dbPath) {
         return false;
     }
 
-    char *err = nullptr;
     sqlite3_busy_timeout(_db, 5000);
-    sqlite3_exec(_db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, &err);
-    if (err) {
-        sqlite3_free(err);
-        err = nullptr;
-    }
-    sqlite3_exec(_db, "PRAGMA synchronous=NORMAL;", nullptr, nullptr, &err);
-    if (err) {
-        sqlite3_free(err);
-        err = nullptr;
-    }
 
     if (!initSchema()) {
         std::cerr << "SnmpDatabase: Failed to initialize schema" << std::endl;
@@ -83,7 +72,7 @@ bool SnmpDatabase::open(const std::string &dbPath) {
     }
 
     prepareStatements();
-    std::cout << "SnmpDatabase: Opened " << _dbPath << " successfully (WAL mode)" << std::endl;
+    std::cout << "SnmpDatabase: Opened " << _dbPath << " successfully" << std::endl;
     return true;
 }
 
@@ -247,7 +236,6 @@ bool SnmpDatabase::insertSamplesBatch(const std::vector<SnmpSampleRecord> &sampl
         return false;
     }
 
-    sqlite3_exec(_db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
     for (const auto &sample : samples) {
         sqlite3_reset(_stmtInsertSample);
         sqlite3_bind_int64(_stmtInsertSample, 1, sample.timestamp);
@@ -262,7 +250,6 @@ bool SnmpDatabase::insertSamplesBatch(const std::vector<SnmpSampleRecord> &sampl
         sqlite3_bind_int64(_stmtInsertSample, 10, sample.outErrors);
         sqlite3_step(_stmtInsertSample);
     }
-    sqlite3_exec(_db, "COMMIT;", nullptr, nullptr, nullptr);
     return true;
 }
 
@@ -702,19 +689,15 @@ bool SnmpDatabase::commitActionApproved(int64_t id, const std::string &prevHash,
     std::lock_guard<std::mutex> lock(_mutex);
     if (!_db) return false;
 
-    sqlite3_exec(_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr);
-
     PendingAction act;
     const char *sqlSel = "SELECT tool, requester, payload FROM pending_actions WHERE id = ?;";
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(_db, sqlSel, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, id);
     if (sqlite3_step(stmt) != SQLITE_ROW) {
         sqlite3_finalize(stmt);
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     const char *at0 = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
@@ -727,7 +710,6 @@ bool SnmpDatabase::commitActionApproved(int64_t id, const std::string &prevHash,
 
     const char *sqlUp = "UPDATE pending_actions SET status = 'approved' WHERE id = ? AND status = 'executing';";
     if (sqlite3_prepare_v2(_db, sqlUp, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, id);
@@ -735,7 +717,6 @@ bool SnmpDatabase::commitActionApproved(int64_t id, const std::string &prevHash,
     sqlite3_finalize(stmt);
 
     if (sqlite3_changes(_db) == 0) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
 
@@ -743,7 +724,6 @@ bool SnmpDatabase::commitActionApproved(int64_t id, const std::string &prevHash,
     const char *sqlAudit = "INSERT INTO audit_outbox (timestamp, prev_hash, action_id, tool, requester, payload, decision, reason, exported) "
                            "VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, 0);";
     if (sqlite3_prepare_v2(_db, sqlAudit, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, now);
@@ -757,8 +737,6 @@ bool SnmpDatabase::commitActionApproved(int64_t id, const std::string &prevHash,
     sqlite3_finalize(stmt);
 
     int64_t seq = sqlite3_last_insert_rowid(_db);
-    sqlite3_exec(_db, "COMMIT;", nullptr, nullptr, nullptr);
-
     outAudit.sequence = seq;
     outAudit.timestamp = now;
     outAudit.prevHash = prevHash;
@@ -776,19 +754,15 @@ bool SnmpDatabase::commitActionFailed(int64_t id, const std::string &prevHash, c
     std::lock_guard<std::mutex> lock(_mutex);
     if (!_db) return false;
 
-    sqlite3_exec(_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr);
-
     PendingAction act;
     const char *sqlSel = "SELECT tool, requester, payload FROM pending_actions WHERE id = ?;";
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(_db, sqlSel, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, id);
     if (sqlite3_step(stmt) != SQLITE_ROW) {
         sqlite3_finalize(stmt);
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     const char *ft0 = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
@@ -801,7 +775,6 @@ bool SnmpDatabase::commitActionFailed(int64_t id, const std::string &prevHash, c
 
     const char *sqlUp = "UPDATE pending_actions SET status = 'pending' WHERE id = ? AND status = 'executing';";
     if (sqlite3_prepare_v2(_db, sqlUp, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, id);
@@ -809,7 +782,6 @@ bool SnmpDatabase::commitActionFailed(int64_t id, const std::string &prevHash, c
     sqlite3_finalize(stmt);
 
     if (sqlite3_changes(_db) == 0) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
 
@@ -817,7 +789,6 @@ bool SnmpDatabase::commitActionFailed(int64_t id, const std::string &prevHash, c
     const char *sqlAudit = "INSERT INTO audit_outbox (timestamp, prev_hash, action_id, tool, requester, payload, decision, reason, exported) "
                            "VALUES (?, ?, ?, ?, ?, ?, 'failed', ?, 0);";
     if (sqlite3_prepare_v2(_db, sqlAudit, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, now);
@@ -831,8 +802,6 @@ bool SnmpDatabase::commitActionFailed(int64_t id, const std::string &prevHash, c
     sqlite3_finalize(stmt);
 
     int64_t seq = sqlite3_last_insert_rowid(_db);
-    sqlite3_exec(_db, "COMMIT;", nullptr, nullptr, nullptr);
-
     outAudit.sequence = seq;
     outAudit.timestamp = now;
     outAudit.prevHash = prevHash;
@@ -850,12 +819,9 @@ bool SnmpDatabase::commitActionDenied(int64_t id, const std::string &prevHash, c
     std::lock_guard<std::mutex> lock(_mutex);
     if (!_db) return false;
 
-    sqlite3_exec(_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr);
-
     const char *sqlUp = "UPDATE pending_actions SET status = 'denied' WHERE id = ? AND status = 'pending';";
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(_db, sqlUp, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, id);
@@ -863,20 +829,17 @@ bool SnmpDatabase::commitActionDenied(int64_t id, const std::string &prevHash, c
     sqlite3_finalize(stmt);
 
     if (sqlite3_changes(_db) == 0) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
 
     PendingAction act;
     const char *sqlSel = "SELECT tool, requester, payload FROM pending_actions WHERE id = ?;";
     if (sqlite3_prepare_v2(_db, sqlSel, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, id);
     if (sqlite3_step(stmt) != SQLITE_ROW) {
         sqlite3_finalize(stmt);
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     act.tool = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
@@ -888,7 +851,6 @@ bool SnmpDatabase::commitActionDenied(int64_t id, const std::string &prevHash, c
     const char *sqlAudit = "INSERT INTO audit_outbox (timestamp, prev_hash, action_id, tool, requester, payload, decision, reason, exported) "
                            "VALUES (?, ?, ?, ?, ?, ?, 'denied', ?, 0);";
     if (sqlite3_prepare_v2(_db, sqlAudit, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, now);
@@ -902,8 +864,6 @@ bool SnmpDatabase::commitActionDenied(int64_t id, const std::string &prevHash, c
     sqlite3_finalize(stmt);
 
     int64_t seq = sqlite3_last_insert_rowid(_db);
-    sqlite3_exec(_db, "COMMIT;", nullptr, nullptr, nullptr);
-
     outAudit.sequence = seq;
     outAudit.timestamp = now;
     outAudit.prevHash = prevHash;
@@ -925,13 +885,10 @@ bool SnmpDatabase::reconcileAction(int64_t id, const std::string &reconcileMode,
     std::lock_guard<std::mutex> lock(_mutex);
     if (!_db) return false;
 
-    sqlite3_exec(_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr);
-
     std::string newStatus = (reconcileMode == "applied") ? "approved" : "pending";
     const char *sqlUp = "UPDATE pending_actions SET status = ? WHERE id = ? AND status = 'interrupted';";
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(_db, sqlUp, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_text(stmt, 1, newStatus.c_str(), -1, SQLITE_TRANSIENT);
@@ -940,20 +897,17 @@ bool SnmpDatabase::reconcileAction(int64_t id, const std::string &reconcileMode,
     sqlite3_finalize(stmt);
 
     if (sqlite3_changes(_db) == 0) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
 
     PendingAction act;
     const char *sqlSel = "SELECT tool, requester, payload FROM pending_actions WHERE id = ?;";
     if (sqlite3_prepare_v2(_db, sqlSel, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, id);
     if (sqlite3_step(stmt) != SQLITE_ROW) {
         sqlite3_finalize(stmt);
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     act.tool = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
@@ -969,7 +923,6 @@ bool SnmpDatabase::reconcileAction(int64_t id, const std::string &reconcileMode,
     const char *sqlAudit = "INSERT INTO audit_outbox (timestamp, prev_hash, action_id, tool, requester, payload, decision, reason, exported) "
                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0);";
     if (sqlite3_prepare_v2(_db, sqlAudit, -1, &stmt, nullptr) != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
     sqlite3_bind_int64(stmt, 1, now);
@@ -984,8 +937,6 @@ bool SnmpDatabase::reconcileAction(int64_t id, const std::string &reconcileMode,
     sqlite3_finalize(stmt);
 
     int64_t seq = sqlite3_last_insert_rowid(_db);
-    sqlite3_exec(_db, "COMMIT;", nullptr, nullptr, nullptr);
-
     outAudit.sequence = seq;
     outAudit.timestamp = now;
     outAudit.prevHash = prevHash;

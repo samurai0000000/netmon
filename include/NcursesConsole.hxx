@@ -121,7 +121,7 @@ private:
     void renderMiddlePanel();
     void renderLogPanel();
     void addOutputLine(const std::string &line, int colorPair = 0, bool isBold = false, bool isBlink = false);
-    std::string promptPassword(const std::string &promptMsg);
+    std::string promptPassword(const std::string &promptMsg, bool hide = true);
 
     ShutdownCallback _shutdownCb;
 

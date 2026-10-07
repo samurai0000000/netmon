@@ -39,12 +39,393 @@ __attribute__((constructor(101))) static void disableCppUTestLeakOverloads() {
 #include <ctime>
 #include <thread>
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
 
-static void logDiag(const std::string &msg) {
-    std::ofstream ofs("/tmp/netmon_diag.log", std::ios::app);
-    if (ofs.is_open()) {
-        ofs << msg << std::endl;
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static bool ensureDir0700(const std::string &path) {
+    struct stat st;
+    if (lstat(path.c_str(), &st) == 0) {
+        return S_ISDIR(st.st_mode);
     }
+    return mkdir(path.c_str(), 0700) == 0;
+}
+
+std::string diagLogPath() {
+    const char *home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0') {
+        return "";
+    }
+    return std::string(home) + "/.config/netmon/logs/netmon_diag.log";
+}
+
+void logDiag(const std::string &msg) {
+    const char *home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0') {
+        return;
+    }
+    std::string root(home);
+    if (!ensureDir0700(root + "/.config") ||
+        !ensureDir0700(root + "/.config/netmon") ||
+        !ensureDir0700(root + "/.config/netmon/logs")) {
+        return;
+    }
+    std::string path = diagLogPath();
+    int fd = open(path.c_str(),
+                  O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC,
+                  0600);
+    if (fd < 0) {
+        return;
+    }
+    if (fchmod(fd, 0600) != 0) {
+        close(fd);
+        return;
+    }
+    std::string line = msg;
+    line.push_back('\n');
+    const char *data = line.data();
+    size_t left = line.size();
+    while (left > 0) {
+        ssize_t wrote = write(fd, data, left);
+        if (wrote < 0) {
+            break;
+        }
+        data += wrote;
+        left -= static_cast<size_t>(wrote);
+    }
+    close(fd);
+}
+
+bool diagnosticLineIsConfig(const std::string &line) {
+    std::string token;
+    for (char c : line) {
+        if (c == ' ' || c == '\t') {
+            if (!token.empty()) {
+                break;
+            }
+            continue;
+        }
+        token.push_back(c);
+    }
+    return token == "configure" || token == "address-object" ||
+           token == "address6-object" || token == "service-object" ||
+           token == "schedule-object" || token == "object-group" ||
+           token == "secure-policy" || token == "no" || token == "ip" ||
+           token == "wlan-ssid-profile" || token == "wlan-security-profile" ||
+           token == "groupname" || token == "isakmp" || token == "bwm" ||
+           token == "exit" || token == "write" || token == "reboot" ||
+           token == "copy" || token == "boot";
+}
+
+std::vector<std::string> diagnosticReadCatalog() {
+    return {
+        ZyxelSystemCmd::cmdShowVersion(),
+        ZyxelSystemCmd::cmdShowCpuStatus(),
+        ZyxelSystemCmd::cmdShowMemStatus(),
+        ZyxelSystemCmd::cmdShowConnStatus(),
+        ZyxelNetworkCmd::cmdShowInterfaces(),
+        ZyxelNetworkCmd::cmdShowIpRoute(),
+        ZyxelObjectCmd::cmdShowAddressObjects(),
+        ZyxelObjectCmd::cmdShowServiceObjects(),
+        ZyxelFirewallCmd::cmdShowSecurePolicy(),
+        ZyxelNatCmd::cmdShowVirtualServers(),
+        ZyxelSystemCmd::cmdPing("192.0.2.1", 2)
+    };
+}
+
+static std::string envelopeGroup(const std::string &token) {
+    std::string lower = token;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    if (lower == "e1") return "LiveFirewallE1";
+    if (lower == "e2") return "LiveFirewallE2";
+    if (lower == "e3") return "LiveFirewallE3";
+    if (lower == "e4") return "LiveFirewallE4";
+    if (lower == "e5") return "LiveFirewallE5";
+    if (lower == "e6") return "LiveFirewallE6";
+    if (lower == "e7") return "LiveFirewallE7";
+    if (lower == "e8") return "LiveFirewallE8";
+    if (lower == "e9") return "LiveFirewallE9";
+    if (lower == "e10") return "LiveFirewallE10";
+    return "";
+}
+
+std::vector<std::string> buildDiagnosticArgv(const std::string &mode,
+                                             const std::string &filter) {
+    std::vector<std::string> args = {"netmon_diag", "-v"};
+    std::string envFromFilter = envelopeGroup(filter);
+    std::string envFromMode = envelopeGroup(mode);
+    if (!envFromFilter.empty()) {
+        args.push_back("-sg");
+        args.push_back(envFromFilter);
+    } else if (!envFromMode.empty()) {
+        args.push_back("-sg");
+        args.push_back(envFromMode);
+    } else if (mode == "read") {
+        const char *groups[] = {
+            "LiveFirewallReadDiag",
+            "LiveFirewallE1", "LiveFirewallE2", "LiveFirewallE3",
+            "LiveFirewallE4", "LiveFirewallE5", "LiveFirewallE6",
+            "LiveFirewallE7", "LiveFirewallE8", "LiveFirewallE9",
+            "LiveFirewallE10"
+        };
+        for (const char *group : groups) {
+            args.push_back("-sg");
+            args.push_back(group);
+        }
+        args.push_back("-xn");
+        args.push_back("Write");
+    } else if (mode == "write") {
+        args.push_back("-n");
+        args.push_back("Write");
+        args.push_back("-n");
+        args.push_back("DriverBlockIpAndUnblockIp");
+    }
+    if (!filter.empty() && envFromFilter.empty() && mode != "write" && mode != "read") {
+        args.push_back("-sn");
+        args.push_back(filter);
+    } else if (!filter.empty() && envFromFilter.empty() && mode == "read") {
+        args.push_back("-sn");
+        args.push_back(filter);
+    }
+    return args;
+}
+
+static bool diagRouterRejected(SshResult res, const std::string &out) {
+    if (res != SshResult::SUCCESS) {
+        return true;
+    }
+    if (ZyxelSshClient::isSyntaxError(out)) {
+        return true;
+    }
+    return out.find("already exists") != std::string::npos ||
+           out.find("duplicated") != std::string::npos;
+}
+
+static bool lineOpensPolicy(const std::string &command) {
+    const char *forms[] = {"secure-policy insert", "secure-policy append"};
+    for (const char *form : forms) {
+        std::string prefix(form);
+        if (command == prefix || command.compare(0, prefix.size() + 1, prefix + " ") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+DiagRestoreBracket::DiagRestoreBracket(ZyxelDriver &driver,
+                                       std::vector<std::string> inverse,
+                                       std::string showCommand,
+                                       std::string objectToken)
+    : _driver(driver),
+      _inverse(std::move(inverse)),
+      _showCommand(std::move(showCommand)),
+      _objectToken(std::move(objectToken)),
+      _unblockIp(),
+      _showOutput(),
+      _restoreError(),
+      _restored(false),
+      _restoreSucceeded(true),
+      _objectGone(false),
+      _policyAborted(false),
+      _awaitingNoActivate(false) {
+}
+
+DiagRestoreBracket::~DiagRestoreBracket() {
+    restore();
+}
+
+void DiagRestoreBracket::restoreByUnblock(const std::string &ip) {
+    _unblockIp = ip;
+}
+
+void DiagRestoreBracket::dismiss() {
+    _restored = true;
+}
+
+SshResult DiagRestoreBracket::send(const std::string &line) {
+    if (_policyAborted) {
+        return SshResult::ERR_REJECTED;
+    }
+    if (_awaitingNoActivate && line != "no activate") {
+        _policyAborted = true;
+        _driver.getSshClient().disconnect();
+        return SshResult::ERR_REJECTED;
+    }
+    if (line == "exit" &&
+        _driver.getSshClient().getPromptState() == PromptState::POLICY_SUBMODE &&
+        !_driver.getSshClient().policyInactiveAcknowledged()) {
+        _policyAborted = true;
+        _driver.getSshClient().disconnect();
+        return SshResult::ERR_REJECTED;
+    }
+    bool ackBefore = _driver.getSshClient().policyInactiveAcknowledged();
+    std::string out;
+    SshResult res = _driver.sendDiagnosticLine(line, out, 5000);
+    if (lineOpensPolicy(line) && !diagRouterRejected(res, out)) {
+        _awaitingNoActivate = true;
+    }
+    if (line == "no activate") {
+        _awaitingNoActivate = false;
+        if (!ackBefore && diagRouterRejected(res, out)) {
+            _policyAborted = true;
+            _driver.getSshClient().disconnect();
+        }
+    }
+    return res;
+}
+
+void DiagRestoreBracket::ensureConfigMode() {
+    if (_policyAborted) {
+        return;
+    }
+    PromptState state = _driver.getSshClient().getPromptState();
+    if (state == PromptState::POLICY_SUBMODE) {
+        return;
+    }
+    for (int i = 0; i < 4; ++i) {
+        state = _driver.getSshClient().getPromptState();
+        if (state != PromptState::OTHER_SUBMODE) {
+            break;
+        }
+        std::string out;
+        SshResult res = _driver.sendDiagnosticLine("exit", out, 5000);
+        if (res != SshResult::SUCCESS || ZyxelSshClient::isSyntaxError(out)) {
+            _restoreSucceeded = false;
+            if (_restoreError.empty()) {
+                _restoreError = std::string("exit: ") + out;
+            }
+            return;
+        }
+    }
+    state = _driver.getSshClient().getPromptState();
+    if (state == PromptState::ROOT || state == PromptState::USER ||
+        state == PromptState::UNKNOWN) {
+        std::string out;
+        SshResult res = _driver.sendDiagnosticLine("configure terminal", out, 5000);
+        if (res != SshResult::SUCCESS || ZyxelSshClient::isSyntaxError(out)) {
+            _restoreSucceeded = false;
+            if (_restoreError.empty()) {
+                _restoreError = std::string("configure terminal: ") + out;
+            }
+        }
+    }
+}
+
+void DiagRestoreBracket::restore() {
+    if (_restored) {
+        return;
+    }
+    _restored = true;
+    bool unackedPolicy =
+        _driver.getSshClient().getPromptState() == PromptState::POLICY_SUBMODE &&
+        !_driver.getSshClient().policyInactiveAcknowledged();
+    if (_policyAborted || unackedPolicy) {
+        _driver.getSshClient().disconnect();
+        _restoreSucceeded = false;
+        _restoreError = "unsafe policy submode";
+        _objectGone = false;
+        return;
+    }
+    if (_driver.getSshClient().getPromptState() == PromptState::POLICY_SUBMODE) {
+        std::string out;
+        _driver.sendDiagnosticLine("exit", out, 5000);
+    }
+    ensureConfigMode();
+    if (!_unblockIp.empty()) {
+        nlohmann::json result = _driver.unblockIp(_unblockIp);
+        if (result.value("status", "") != "success") {
+            _restoreSucceeded = false;
+            _restoreError = result.value("error", "unblock failed");
+        }
+    }
+    for (const auto &line : _inverse) {
+        if (line == "exit") {
+            PromptState state = _driver.getSshClient().getPromptState();
+            if (state == PromptState::ROOT || state == PromptState::USER) {
+                continue;
+            }
+        }
+        std::string out;
+        SshResult res = _driver.sendDiagnosticLine(line, out, 5000);
+        if (res != SshResult::SUCCESS || ZyxelSshClient::isSyntaxError(out)) {
+            _restoreSucceeded = false;
+            if (_restoreError.empty()) {
+                _restoreError = line + ": " + out;
+            }
+        }
+    }
+    if (_showCommand.empty()) {
+        return;
+    }
+    SshResult showRes = _driver.sendDiagnosticLine(_showCommand, _showOutput, 15000);
+    if (showRes != SshResult::SUCCESS) {
+        _restoreSucceeded = false;
+        if (_restoreError.empty()) {
+            _restoreError = _showCommand + ": " + _showOutput;
+        }
+    }
+    bool missing = _showOutput.find(_objectToken) == std::string::npos;
+    bool absent = _showOutput.find("does not exist") != std::string::npos;
+    _objectGone = _restoreSucceeded &&
+                  (_objectToken.empty() || missing || absent);
+}
+
+static void runRestoredWrite(const char *group,
+                             const char *test,
+                             const char *label,
+                             double slaMs,
+                             const std::vector<std::string> &mutate,
+                             const std::vector<std::string> &inverse,
+                             const std::string &showCmd,
+                             const std::string &token) {
+    ZyxelDriver &driver = ZyxelDriver::getInstance();
+    if (!driver.isConnected()) {
+        return;
+    }
+    auto t0 = std::chrono::steady_clock::now();
+    bool created = false;
+    bool gone = false;
+    bool mutateSucceeded = true;
+    bool restoreSucceeded = false;
+    std::string restoreError;
+    size_t bytes = 0;
+    {
+        DiagRestoreBracket bracket(driver, inverse, showCmd, token);
+        for (const auto &line : mutate) {
+            if (bracket.send(line) != SshResult::SUCCESS) {
+                mutateSucceeded = false;
+                break;
+            }
+        }
+        bracket.ensureConfigMode();
+        std::string shown;
+        SshResult showRes = driver.sendDiagnosticLine(showCmd, shown, 15000);
+        created = mutateSucceeded && showRes == SshResult::SUCCESS &&
+                  shown.find(token) != std::string::npos;
+        bracket.restore();
+        restoreSucceeded = bracket.restoreSucceeded();
+        restoreError = bracket.restoreError();
+        gone = bracket.objectGone();
+        bytes = bracket.showOutput().size();
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    bool passed = created && restoreSucceeded && gone && rttMs <= slaMs;
+    ZyxelBenchmark::record({
+        group, test, label,
+        rttMs, 0, bytes, 1, passed,
+        passed ? "PASS (RESTORE)" : "FAIL"
+    });
+    if (!restoreSucceeded && !restoreError.empty()) {
+        logDiag(std::string(test) + " restore failed: " + restoreError);
+    }
+    CHECK_TRUE(created);
+    CHECK_TRUE(restoreSucceeded);
+    CHECK_TRUE(gone);
+    CHECK_TRUE(rttMs <= slaMs);
 }
 
 static std::vector<DiagMetricEntry> s_metrics;
@@ -488,309 +869,69 @@ TEST(LiveFirewallReadDiag, PingGateway) {
 
 TEST_GROUP(LiveFirewallWriteDiag) {
     void setup() override {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (driver.isConnected()) {
-            driver.getSshClient().unwindToRootPrompt();
-            ZyxelSshClient &ssh = driver.getSshClient();
-            std::string out;
-
-            // Dynamically sweep and remove any orphaned QA rules from prior runs
-            ssh.executeCommand(ZyxelFirewallCmd::cmdShowSecurePolicy(), out);
-            std::vector<ZyxelFirewallRule> rules;
-            if (ZyxelFirewallCmd::parseSecurePolicy(out, rules)) {
-                ssh.executeCommand("configure terminal", out);
-                for (const auto &r : rules) {
-                    if (r.sourceIp.find("NETMON_") != std::string::npos ||
-                        r.name.find("NETMON_") != std::string::npos ||
-                        r.description.find("NETMON_") != std::string::npos ||
-                        r.description.find("Live diag") != std::string::npos) {
-                        ssh.executeCommand(ZyxelFirewallCmd::cmdDeleteRule(r.name), out);
-                    }
-                }
-                ssh.unwindToRootPrompt();
-            }
-
-            ssh.executeCommand("configure terminal", out);
-            ssh.executeCommand(ZyxelFirewallCmd::cmdDeleteRule("NETMON_QA_RULE"), out);
-            ssh.executeCommand(ZyxelFirewallCmd::cmdDeleteRule("NETMON_RULE_192_0_2_220"), out);
-            ssh.executeCommand("no ip virtual-server TEST", out);
-            ssh.executeCommand(ZyxelNatCmd::cmdDeleteVirtualServer("NETMON_QA_VS"), out);
-            ssh.executeCommand("no address-object NETMON_QA_HOST", out);
-            ssh.executeCommand("no address-object NETMON_QA_RNG", out);
-            ssh.executeCommand("no address-object NETMON_QA_SUBNET", out);
-            ssh.executeCommand("no address-object NETMON_QA_RULE_HOST", out);
-            ssh.executeCommand("no address-object NETMON_BLK_192_0_2_220", out);
-            ssh.executeCommand("no address-object NETMON_QA_WRAP", out);
-            ssh.executeCommand("no service-object NETMON_QA_TCP", out);
-            ssh.executeCommand("no service-object NETMON_QA_UDP", out);
-            ssh.executeCommand("no service-object NETMON_QA_VS_SVC", out);
-            ssh.unwindToRootPrompt();
-        }
     }
 
     void teardown() override {
-        // Enforce absolute RAII safety: unwind config mode and delete any residual test objects
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (!driver.isConnected()) return;
-
-        ZyxelSshClient &ssh = driver.getSshClient();
-        std::string out;
-
-        // Dynamically sweep and remove any remaining QA rules
-        ssh.executeCommand(ZyxelFirewallCmd::cmdShowSecurePolicy(), out);
-        std::vector<ZyxelFirewallRule> rules;
-        if (ZyxelFirewallCmd::parseSecurePolicy(out, rules)) {
-            ssh.executeCommand("configure terminal", out);
-            for (const auto &r : rules) {
-                if (r.sourceIp.find("NETMON_") != std::string::npos ||
-                    r.name.find("NETMON_") != std::string::npos ||
-                    r.description.find("NETMON_") != std::string::npos ||
-                    r.description.find("Live diag") != std::string::npos) {
-                    ssh.executeCommand(ZyxelFirewallCmd::cmdDeleteRule(r.name), out);
-                }
-            }
-            ssh.unwindToRootPrompt();
-        }
-
-        ssh.executeCommand("configure terminal", out);
-        ssh.executeCommand(ZyxelFirewallCmd::cmdDeleteRule("NETMON_QA_RULE"), out);
-        ssh.executeCommand(ZyxelFirewallCmd::cmdDeleteRule("NETMON_RULE_192_0_2_220"), out);
-        ssh.executeCommand("no ip virtual-server TEST", out);
-        ssh.executeCommand(ZyxelNatCmd::cmdDeleteVirtualServer("NETMON_QA_VS"), out);
-        ssh.executeCommand("no address-object NETMON_QA_HOST", out);
-        ssh.executeCommand("no address-object NETMON_QA_RNG", out);
-        ssh.executeCommand("no address-object NETMON_QA_SUBNET", out);
-        ssh.executeCommand("no address-object NETMON_QA_RULE_HOST", out);
-        ssh.executeCommand("no address-object NETMON_BLK_192_0_2_220", out);
-        ssh.executeCommand("no address-object NETMON_QA_WRAP", out);
-        ssh.executeCommand("no service-object NETMON_QA_TCP", out);
-        ssh.executeCommand("no service-object NETMON_QA_UDP", out);
-        ssh.executeCommand("no service-object NETMON_QA_VS_SVC", out);
-        ssh.unwindToRootPrompt();
     }
 };
 
 TEST(LiveFirewallWriteDiag, WriteAddressHostRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallWriteDiag", "WriteAddressHostRollback",
+        "address-object NETMON_QA_HOST", 4500.0,
+        {"configure terminal", "address-object NETMON_QA_HOST 192.0.2.201"},
+        {"no address-object NETMON_QA_HOST", "exit"},
+        ZyxelObjectCmd::cmdShowAddressObjects(), "NETMON_QA_HOST");
 
-    // 1. Enter config and create host
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand("address-object NETMON_QA_HOST 192.0.2.201", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
-
-    // 2. Verify creation in address-object table
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddressObjects(), out);
-    CHECK_TRUE(out.find("NETMON_QA_HOST") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand("no address-object NETMON_QA_HOST", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddressObjects(), out);
-    bool deleted = (out.find("NETMON_QA_HOST") == std::string::npos);
-    CHECK_TRUE(deleted);
-
-    auto t1 = std::chrono::steady_clock::now();
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = deleted && (rttMs <= 4500.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallWriteDiag", "WriteAddressHostRollback", "address-object NETMON_QA_HOST",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (SLA)" : "FAIL"
-    });
-    CHECK_TRUE(rttMs <= 4500.0);
 }
 
 TEST(LiveFirewallWriteDiag, WriteAddressRangeRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallWriteDiag", "WriteAddressRangeRollback",
+        "address-object NETMON_QA_RNG", 4500.0,
+        {"configure terminal", "address-object NETMON_QA_RNG 192.0.2.202-192.0.2.205"},
+        {"no address-object NETMON_QA_RNG", "exit"},
+        ZyxelObjectCmd::cmdShowAddressObjects(), "NETMON_QA_RNG");
 
-    // 1. Create range
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand("address-object NETMON_QA_RNG 192.0.2.202-192.0.2.205", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddressObjects(), out);
-    CHECK_TRUE(out.find("NETMON_QA_RNG") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand("no address-object NETMON_QA_RNG", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddressObjects(), out);
-    bool deleted = (out.find("NETMON_QA_RNG") == std::string::npos);
-    CHECK_TRUE(deleted);
-
-    auto t1 = std::chrono::steady_clock::now();
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = deleted && (rttMs <= 4500.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallWriteDiag", "WriteAddressRangeRollback", "address-object NETMON_QA_RNG",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (SLA)" : "FAIL"
-    });
-    CHECK_TRUE(rttMs <= 4500.0);
 }
 
 TEST(LiveFirewallWriteDiag, WriteAddressSubnetRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallWriteDiag", "WriteAddressSubnetRollback",
+        "address-object NETMON_QA_SUBNET", 4500.0,
+        {"configure terminal", "address-object NETMON_QA_SUBNET 192.0.2.224/28"},
+        {"no address-object NETMON_QA_SUBNET", "exit"},
+        ZyxelObjectCmd::cmdShowAddressObjects(), "NETMON_QA_SUBNET");
 
-    // 1. Create subnet
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand("address-object NETMON_QA_SUBNET 192.0.2.224/28", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddressObjects(), out);
-    CHECK_TRUE(out.find("NETMON_QA_SUBNET") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand("no address-object NETMON_QA_SUBNET", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddressObjects(), out);
-    bool deleted = (out.find("NETMON_QA_SUBNET") == std::string::npos);
-    CHECK_TRUE(deleted);
-
-    auto t1 = std::chrono::steady_clock::now();
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = deleted && (rttMs <= 4500.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallWriteDiag", "WriteAddressSubnetRollback", "address-object NETMON_QA_SUBNET",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (SLA)" : "FAIL"
-    });
-    CHECK_TRUE(rttMs <= 4500.0);
 }
 
 TEST(LiveFirewallWriteDiag, WriteServiceTcpRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallWriteDiag", "WriteServiceTcpRollback",
+        "service-object NETMON_QA_TCP", 4500.0,
+        {"configure terminal", "service-object NETMON_QA_TCP tcp eq 65432"},
+        {"no service-object NETMON_QA_TCP", "exit"},
+        ZyxelObjectCmd::cmdShowServiceObjects(), "NETMON_QA_TCP");
 
-    // 1. Create TCP service
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand("service-object NETMON_QA_TCP tcp eq 65432", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowServiceObjects(), out);
-    CHECK_TRUE(out.find("NETMON_QA_TCP") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand("no service-object NETMON_QA_TCP", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowServiceObjects(), out);
-    bool deleted = (out.find("NETMON_QA_TCP") == std::string::npos);
-    CHECK_TRUE(deleted);
-
-    auto t1 = std::chrono::steady_clock::now();
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = deleted && (rttMs <= 4500.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallWriteDiag", "WriteServiceTcpRollback", "service-object NETMON_QA_TCP",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (SLA)" : "FAIL"
-    });
-    CHECK_TRUE(rttMs <= 4500.0);
 }
 
 TEST(LiveFirewallWriteDiag, WriteServiceUdpRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallWriteDiag", "WriteServiceUdpRollback",
+        "service-object NETMON_QA_UDP", 4500.0,
+        {"configure terminal", "service-object NETMON_QA_UDP udp eq 65432"},
+        {"no service-object NETMON_QA_UDP", "exit"},
+        ZyxelObjectCmd::cmdShowServiceObjects(), "NETMON_QA_UDP");
 
-    // 1. Create UDP service
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand("service-object NETMON_QA_UDP udp eq 65432", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowServiceObjects(), out);
-    CHECK_TRUE(out.find("NETMON_QA_UDP") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand("no service-object NETMON_QA_UDP", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowServiceObjects(), out);
-    bool deleted = (out.find("NETMON_QA_UDP") == std::string::npos);
-    CHECK_TRUE(deleted);
-
-    auto t1 = std::chrono::steady_clock::now();
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = deleted && (rttMs <= 4500.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallWriteDiag", "WriteServiceUdpRollback", "service-object NETMON_QA_UDP",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (SLA)" : "FAIL"
-    });
-    CHECK_TRUE(rttMs <= 4500.0);
 }
 
 TEST(LiveFirewallWriteDiag, WriteVirtualServerRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
-    logDiag("=== WriteVirtualServerRollback START ===");
-
-    // 1. Pre-create dummy service
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelObjectCmd::cmdAddService("NETMON_QA_VS_SVC", "tcp", 65433), out);
-    logDiag("add service out: " + out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Create virtual-server using ZyxelNatCmd::cmdAddVirtualServer
     ZyxelVirtualServerRule rule;
     rule.name = "NETMON_QA_VS";
     rule.interface = "wan1_ppp";
@@ -799,215 +940,74 @@ TEST(LiveFirewallWriteDiag, WriteVirtualServerRollback) {
     rule.originalService = "NETMON_QA_VS_SVC";
     rule.mappedService = "NETMON_QA_VS_SVC";
     rule.active = true;
-    std::string cmdAdd = ZyxelNatCmd::cmdAddVirtualServer(rule);
-    logDiag("cmdAdd: " + cmdAdd);
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand(cmdAdd, out);
-    logDiag("resAdd=" + std::to_string(static_cast<int>(resAdd)) + " out: " + out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
+    runRestoredWrite(
+        "LiveFirewallWriteDiag", "WriteVirtualServerRollback",
+        "ip virtual-server NETMON_QA_VS", 6000.0,
+        {"configure terminal",
+         ZyxelObjectCmd::cmdAddService("NETMON_QA_VS_SVC", "tcp", 65433),
+         ZyxelNatCmd::cmdAddVirtualServer(rule)},
+        {ZyxelNatCmd::cmdDeleteVirtualServer("NETMON_QA_VS"),
+         ZyxelObjectCmd::cmdDeleteService("NETMON_QA_VS_SVC"),
+         "exit"},
+        ZyxelNatCmd::cmdShowVirtualServers(), "NETMON_QA_VS");
 
-    // 3. Verify creation
-    ssh.executeCommand(ZyxelNatCmd::cmdShowVirtualServers(), out);
-    logDiag("show vs: " + out);
-    CHECK_TRUE(out.find("virtual server: NETMON_QA_VS") != std::string::npos);
-
-    // 4. Rollback virtual server then service
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelNatCmd::cmdDeleteVirtualServer("NETMON_QA_VS"), out);
-    logDiag("del vs out: " + out);
-    ssh.executeCommand(ZyxelObjectCmd::cmdDeleteService("NETMON_QA_VS_SVC"), out);
-    logDiag("del svc out: " + out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 5. Verify deletion
-    ssh.executeCommand(ZyxelNatCmd::cmdShowVirtualServers(), out);
-    bool deleted = (out.find("virtual server: NETMON_QA_VS") == std::string::npos);
-    logDiag("vs deleted=" + std::string(deleted ? "true" : "false"));
-    CHECK_TRUE(deleted);
-
-    auto t1 = std::chrono::steady_clock::now();
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallWriteDiag", "WriteVirtualServerRollback", "ip virtual-server NETMON_QA_VS",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (SLA)" : "FAIL"
-    });
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 TEST(LiveFirewallWriteDiag, WriteFastDenyRuleRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
-    logDiag("=== WriteFastDenyRuleRollback START ===");
+    runRestoredWrite(
+        "LiveFirewallWriteDiag", "WriteFastDenyRuleRollback",
+        "secure-policy NETMON_QA_RULE", 6000.0,
+        {"configure terminal",
+         "address-object NETMON_QA_RULE_HOST 192.0.2.210",
+         "secure-policy append",
+         "no activate",
+         "name NETMON_QA_RULE",
+         "sourceip NETMON_QA_RULE_HOST",
+         "action deny",
+         "description Live diag QA test",
+         "exit"},
+        {ZyxelFirewallCmd::cmdDeleteRuleByName("NETMON_QA_RULE"),
+         ZyxelObjectCmd::cmdDeleteAddress("NETMON_QA_RULE_HOST"),
+         "exit"},
+        ZyxelFirewallCmd::cmdShowSecurePolicy(), "NETMON_QA_RULE");
 
-    // 1. Create source address object
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand("address-object NETMON_QA_RULE_HOST 192.0.2.210", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Append rule using ZyxelFirewallCmd::cmdAppendFastDeny
-    ssh.executeCommand("configure terminal", out);
-    std::vector<std::string> cmds = ZyxelFirewallCmd::cmdAppendFastDeny("NETMON_QA_RULE", "NETMON_QA_RULE_HOST", "Live diag QA test");
-    for (const auto &c : cmds) {
-        ssh.executeCommand(c, out);
-        logDiag("fastDeny cmd [" + c + "] out: [" + out + "]");
-    }
-    ssh.unwindToRootPrompt();
-
-    // 3. Verify rule creation
-    ssh.executeCommand(ZyxelFirewallCmd::cmdShowSecurePolicy(), out);
-    logDiag("show secure-policy: " + out);
-    CHECK_TRUE(out.find("name: NETMON_QA_RULE") != std::string::npos);
-
-    // 4. Rollback
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelFirewallCmd::cmdDeleteRuleByName("NETMON_QA_RULE"), out);
-    logDiag("del rule out: " + out);
-    ssh.executeCommand(ZyxelObjectCmd::cmdDeleteAddress("NETMON_QA_RULE_HOST"), out);
-    logDiag("del addr out: " + out);
-    ssh.unwindToRootPrompt();
-
-    // 5. Verify deletion
-    ssh.executeCommand(ZyxelFirewallCmd::cmdShowSecurePolicy(), out);
-    bool deleted = (out.find("name: NETMON_QA_RULE") == std::string::npos);
-    logDiag("rule deleted=" + std::string(deleted ? "true" : "false"));
-    CHECK_TRUE(deleted);
-
-    auto t1 = std::chrono::steady_clock::now();
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallWriteDiag", "WriteFastDenyRuleRollback", "secure-policy NETMON_QA_RULE",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (SLA)" : "FAIL"
-    });
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 TEST(LiveFirewallWriteDiag, DriverBlockIpAndUnblockIp) {
+
     ZyxelDriver &driver = ZyxelDriver::getInstance();
     if (!driver.isConnected()) return;
-
     auto t0 = std::chrono::steady_clock::now();
-
     bool prevLive = driver.isLiveEnabled();
-    struct LiveGuard {
-        ZyxelDriver &d;
-        bool prev;
-        LiveGuard(ZyxelDriver &drv, bool p) : d(drv), prev(p) { d.setLiveEnabled(true); }
-        ~LiveGuard() { d.setLiveEnabled(prev); }
-    } liveGuard(driver, prevLive);
-
-    // 1. Call high-level driver blockIp
-    nlohmann::json blkRes = driver.blockIp("192.0.2.220", "Live diag qualification test");
-    logDiag("blkRes: " + blkRes.dump());
-    bool blocked = (blkRes.value("status", "") == "success" || blkRes.value("success", false));
-    CHECK_TRUE(blocked);
-
-    // 2. Verify presence in secure policy and address object
-    std::string out;
-    driver.getSshClient().executeCommand(ZyxelObjectCmd::cmdShowAddressObjects(), out);
-    CHECK_TRUE(out.find("NETMON_BLK_192_0_2_220") != std::string::npos);
-    driver.getSshClient().executeCommand(ZyxelFirewallCmd::cmdShowSecurePolicy(), out);
-    CHECK_TRUE(out.find("name: NETMON_RULE_192_0_2_220") != std::string::npos);
-
-    // 3. Call high-level driver unblockIp
-    nlohmann::json unblkRes = driver.unblockIp("192.0.2.220");
-    logDiag("unblkRes: " + unblkRes.dump());
-    bool unblocked = (unblkRes.value("status", "") == "success" || unblkRes.value("success", false));
-    CHECK_TRUE(unblocked);
-
-    // 4. Verify clean deletion
-    driver.getSshClient().executeCommand(ZyxelObjectCmd::cmdShowAddressObjects(), out);
-    bool objGone = (out.find("NETMON_BLK_192_0_2_220") == std::string::npos);
-    driver.getSshClient().executeCommand(ZyxelFirewallCmd::cmdShowSecurePolicy(), out);
-    bool ruleGone = (out.find("name: NETMON_RULE_192_0_2_220") == std::string::npos);
-    CHECK_TRUE(objGone);
-    CHECK_TRUE(ruleGone);
-
+    driver.setLiveEnabled(true);
+    bool blocked = false;
+    bool gone = false;
+    size_t bytes = 0;
+    {
+        DiagRestoreBracket bracket(driver, {}, ZyxelFirewallCmd::cmdShowSecurePolicy(),
+                                   "NETMON_BLK_192_0_2_220");
+        bracket.restoreByUnblock("192.0.2.220");
+        nlohmann::json blkRes = driver.blockIp("192.0.2.220", "Live diag qualification test");
+        logDiag("blkRes: " + blkRes.dump());
+        blocked = (blkRes.value("status", "") == "success");
+        CHECK_TRUE(blocked);
+        bracket.restore();
+        gone = bracket.objectGone();
+        bytes = bracket.showOutput().size();
+        CHECK_TRUE(gone);
+    }
+    driver.setLiveEnabled(prevLive);
     auto t1 = std::chrono::steady_clock::now();
     double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = blocked && unblocked && objGone && ruleGone && (rttMs <= 6000.0);
-
+    bool passed = blocked && gone && (rttMs <= 6000.0);
     ZyxelBenchmark::record({
         "LiveFirewallWriteDiag", "DriverBlockIpAndUnblockIp", "driver.blockIp / unblockIp",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (SLA)" : "FAIL"
+        rttMs, 0, bytes, 1, passed,
+        passed ? "PASS (RESTORE)" : "FAIL"
     });
     CHECK_TRUE(rttMs <= 6000.0);
-}
 
-TEST(LiveFirewallWriteDiag, ConfigModeWrapping) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
-    std::string matchedPrompt;
-
-    // Test driver transparent configure terminal wrapping for Level 2 command
-    SshResult resAdd = driver.executeClearanceCommand("address-object NETMON_QA_WRAP 192.0.2.221", out, matchedPrompt, 5000, true);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
-
-    // Verify driver unwound prompt back to root Router>
-    CHECK_TRUE(driver.getLastMatchedPrompt().find("(config") == std::string::npos);
-
-    // Delete object via clearance command
-    SshResult resDel = driver.executeClearanceCommand("no address-object NETMON_QA_WRAP", out, matchedPrompt, 5000, true);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // Verify prompt is root
-    CHECK_TRUE(driver.getLastMatchedPrompt().find("(config") == std::string::npos);
-
-    auto t1 = std::chrono::steady_clock::now();
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = (resAdd == SshResult::SUCCESS) && (resDel == SshResult::SUCCESS) && (rttMs <= 4500.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallWriteDiag", "ConfigModeWrapping", "transparent configure terminal",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (SLA)" : "FAIL"
-    });
-    CHECK_TRUE(rttMs <= 4500.0);
-}
-
-TEST(LiveFirewallWriteDiag, SyntaxErrorUnwindAndRecovery) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
-    std::string matchedPrompt;
-
-    // Send intentionally invalid command
-    SshResult res = driver.executeClearanceCommand("address-object INVALID??? 999.999.999.999", out, matchedPrompt, 5000, true);
-    // Clearance should reject as UNCLASSIFIED (SYNTAX error before transmission)
-    CHECK_TRUE(res == SshResult::ERR_SYNTAX || res == SshResult::ERR_EXEC_FAILED || out.find("UNCLASSIFIED") != std::string::npos || out.find("SYNTAX") != std::string::npos);
-
-    // Verify that subsequent read command executes normally and driver session is healthy
-    std::string verOut;
-    SshResult verRes = driver.getSshClient().executeCommand("show version", verOut);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(verRes));
-
-    auto t1 = std::chrono::steady_clock::now();
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = (verRes == SshResult::SUCCESS) && (rttMs <= 2500.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallWriteDiag", "SyntaxErrorUnwindAndRecovery", "recovery from syntax error",
-        rttMs, 0, verOut.size(), 1, passed,
-        passed ? "PASS (SLA)" : "FAIL"
-    });
-    CHECK_TRUE(rttMs <= 2500.0);
 }
 
 // ============================================================================
@@ -2821,28 +2821,10 @@ TEST(LiveFirewallE3, DryFireInvalidOspfArea) {
 // ============================================================================
 
 TEST_GROUP(LiveFirewallE4) {
-    void sweep() {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (!driver.isConnected()) return;
-        ZyxelSshClient &ssh = driver.getSshClient();
-        std::string out;
-        ssh.unwindToRootPrompt();
-        ssh.executeCommand("configure terminal", out);
-        ssh.executeCommand("no object-group address6 NETMON_QA_GRP6", out);
-        ssh.executeCommand("no address6-object NETMON_QA_SUBNET6", out);
-        ssh.executeCommand("no address6-object NETMON_QA_ADDR6", out);
-        ssh.executeCommand("no schedule-object NETMON_QA_SCHED", out);
-        ssh.executeCommand("exit", out);
-        ssh.unwindToRootPrompt();
-    }
-
     void setup() override {
-        sweep();
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
     void teardown() override {
-        sweep();
     }
 };
 
@@ -3633,175 +3615,52 @@ TEST(LiveFirewallE4, DryFireScheduleObjectNonExistent) {
 }
 
 TEST(LiveFirewallE4, WriteScheduleOneTimeRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
-    ssh.unwindToRootPrompt();
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand(
-        ZyxelObjectCmd::cmdAddScheduleOneTime("NETMON_QA_SCHED", "2026-12-31", "00:00", "2026-12-31", "23:59"),
-        out);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
+    runRestoredWrite(
+        "LiveFirewallE4", "WriteScheduleOneTimeRollback",
+        "schedule-object NETMON_QA_SCHED", 4000.0,
+        {"configure terminal",
+         ZyxelObjectCmd::cmdAddScheduleOneTime("NETMON_QA_SCHED", "2026-12-31", "00:00", "2026-12-31", "23:59")},
+        {ZyxelObjectCmd::cmdDeleteSchedule("NETMON_QA_SCHED"), "exit"},
+        ZyxelObjectCmd::cmdShowScheduleObjects("NETMON_QA_SCHED"), "NETMON_QA_SCHED");
 
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowScheduleObjects("NETMON_QA_SCHED"), out);
-    bool created = (out.find("NETMON_QA_SCHED") != std::string::npos);
-
-    SshResult resDel = ssh.executeCommand(ZyxelObjectCmd::cmdDeleteSchedule("NETMON_QA_SCHED"), out);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowScheduleObjects("NETMON_QA_SCHED"), out);
-    bool deleted = (out.find("NETMON_QA_SCHED") == std::string::npos ||
-                    out.find("does not exist") != std::string::npos);
-
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = (resAdd == SshResult::SUCCESS) && (resDel == SshResult::SUCCESS) &&
-                  created && deleted && (rttMs <= 4000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE4", "WriteScheduleOneTimeRollback", "schedule-object NETMON_QA_SCHED",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 4000.0);
 }
 
 TEST(LiveFirewallE4, WriteAddress6HostRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
-    ssh.unwindToRootPrompt();
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand(
-        ZyxelObjectCmd::cmdAddAddress6Host("NETMON_QA_ADDR6", "2001:db8::1"),
-        out);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
+    runRestoredWrite(
+        "LiveFirewallE4", "WriteAddress6HostRollback",
+        "address6-object NETMON_QA_ADDR6", 4000.0,
+        {"configure terminal",
+         ZyxelObjectCmd::cmdAddAddress6Host("NETMON_QA_ADDR6", "2001:db8::1")},
+        {ZyxelObjectCmd::cmdDeleteAddress6("NETMON_QA_ADDR6"), "exit"},
+        ZyxelObjectCmd::cmdShowAddress6Objects("NETMON_QA_ADDR6"), "NETMON_QA_ADDR6");
 
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddress6Objects("NETMON_QA_ADDR6"), out);
-    bool created = (out.find("NETMON_QA_ADDR6") != std::string::npos);
-
-    SshResult resDel = ssh.executeCommand(ZyxelObjectCmd::cmdDeleteAddress6("NETMON_QA_ADDR6"), out);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddress6Objects("NETMON_QA_ADDR6"), out);
-    bool deleted = (out.find("NETMON_QA_ADDR6") == std::string::npos ||
-                    out.find("does not exist") != std::string::npos);
-
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = (resAdd == SshResult::SUCCESS) && (resDel == SshResult::SUCCESS) &&
-                  created && deleted && (rttMs <= 4000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE4", "WriteAddress6HostRollback", "address6-object NETMON_QA_ADDR6",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 4000.0);
 }
 
 TEST(LiveFirewallE4, WriteAddress6SubnetRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
-    ssh.unwindToRootPrompt();
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand(
-        ZyxelObjectCmd::cmdAddAddress6Subnet("NETMON_QA_SUBNET6", "2001:db8:1::", 64),
-        out);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
+    runRestoredWrite(
+        "LiveFirewallE4", "WriteAddress6SubnetRollback",
+        "address6-object NETMON_QA_SUBNET6", 4000.0,
+        {"configure terminal",
+         ZyxelObjectCmd::cmdAddAddress6Subnet("NETMON_QA_SUBNET6", "2001:db8:1::", 64)},
+        {ZyxelObjectCmd::cmdDeleteAddress6("NETMON_QA_SUBNET6"), "exit"},
+        ZyxelObjectCmd::cmdShowAddress6Objects("NETMON_QA_SUBNET6"), "NETMON_QA_SUBNET6");
 
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddress6Objects("NETMON_QA_SUBNET6"), out);
-    bool created = (out.find("NETMON_QA_SUBNET6") != std::string::npos);
-
-    SshResult resDel = ssh.executeCommand(ZyxelObjectCmd::cmdDeleteAddress6("NETMON_QA_SUBNET6"), out);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddress6Objects("NETMON_QA_SUBNET6"), out);
-    bool deleted = (out.find("NETMON_QA_SUBNET6") == std::string::npos ||
-                    out.find("does not exist") != std::string::npos);
-
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = (resAdd == SshResult::SUCCESS) && (resDel == SshResult::SUCCESS) &&
-                  created && deleted && (rttMs <= 4000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE4", "WriteAddress6SubnetRollback", "address6-object NETMON_QA_SUBNET6",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 4000.0);
 }
 
 TEST(LiveFirewallE4, WriteAddress6GroupRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
-    ssh.unwindToRootPrompt();
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand(
-        ZyxelObjectCmd::cmdAddAddress6Group("NETMON_QA_GRP6"),
-        out);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
-    ssh.executeCommand("exit", out);
+    runRestoredWrite(
+        "LiveFirewallE4", "WriteAddress6GroupRollback",
+        "object-group address6 NETMON_QA_GRP6", 4000.0,
+        {"configure terminal",
+         ZyxelObjectCmd::cmdAddAddress6Group("NETMON_QA_GRP6"),
+         "exit"},
+        {ZyxelObjectCmd::cmdDeleteAddress6Group("NETMON_QA_GRP6"), "exit"},
+        ZyxelObjectCmd::cmdShowAddress6Group(), "NETMON_QA_GRP6");
 
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddress6Group(), out);
-    bool created = (out.find("NETMON_QA_GRP6") != std::string::npos);
-
-    SshResult resDel = ssh.executeCommand(ZyxelObjectCmd::cmdDeleteAddress6Group("NETMON_QA_GRP6"), out);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    ssh.executeCommand(ZyxelObjectCmd::cmdShowAddress6Group(), out);
-    bool deleted = (out.find("NETMON_QA_GRP6") == std::string::npos);
-
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = (resAdd == SshResult::SUCCESS) && (resDel == SshResult::SUCCESS) &&
-                  created && deleted && (rttMs <= 4000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE4", "WriteAddress6GroupRollback", "object-group address6 NETMON_QA_GRP6",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 4000.0);
 }
 
 // ============================================================================
@@ -3809,27 +3668,10 @@ TEST(LiveFirewallE4, WriteAddress6GroupRollback) {
 // ============================================================================
 
 TEST_GROUP(LiveFirewallE5) {
-    void sweep() {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (!driver.isConnected()) return;
-        ZyxelSshClient &ssh = driver.getSshClient();
-        std::string out;
-        ssh.unwindToRootPrompt();
-        ssh.executeCommand("configure terminal", out);
-        ssh.executeCommand(ZyxelNatCmd::cmdDeleteDdnsProfile("NETMON_QA_DDNS"), out);
-        ssh.executeCommand(ZyxelNatCmd::cmdDeleteVirtualServer("NETMON_QA_VS"), out);
-        ssh.executeCommand(ZyxelObjectCmd::cmdDeleteService("NETMON_QA_VS_SVC"), out);
-        ssh.executeCommand("exit", out);
-        ssh.unwindToRootPrompt();
-    }
-
     void setup() override {
-        sweep();
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
     void teardown() override {
-        sweep();
     }
 };
 
@@ -4321,60 +4163,17 @@ TEST(LiveFirewallE5, DryFireNatPmpUnsupported) {
 }
 
 TEST(LiveFirewallE5, WriteDdnsProfileRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE5", "WriteDdnsProfileRollback",
+        "ip ddns profile NETMON_QA_DDNS", 4000.0,
+        {"configure terminal", ZyxelNatCmd::cmdAddDdnsProfile("NETMON_QA_DDNS")},
+        {ZyxelNatCmd::cmdDeleteDdnsProfile("NETMON_QA_DDNS"), "exit"},
+        ZyxelNatCmd::cmdShowDdns(), "NETMON_QA_DDNS");
 
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand(ZyxelNatCmd::cmdAddDdnsProfile("NETMON_QA_DDNS"), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
-
-    ssh.executeCommand(ZyxelNatCmd::cmdShowDdns(), out);
-    bool created = (out.find("NETMON_QA_DDNS") != std::string::npos);
-
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelNatCmd::cmdDeleteDdnsProfile("NETMON_QA_DDNS"), out);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    ssh.executeCommand(ZyxelNatCmd::cmdShowDdns(), out);
-    bool deleted = (out.find("NETMON_QA_DDNS") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = (resAdd == SshResult::SUCCESS) && (resDel == SshResult::SUCCESS) &&
-                  created && deleted && (rttMs <= 4000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE5", "WriteDdnsProfileRollback", "ip ddns profile NETMON_QA_DDNS",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 4000.0);
 }
 
 TEST(LiveFirewallE5, WriteVirtualServerRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
-
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
-
-    // 1. Pre-create dummy service
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelObjectCmd::cmdAddService("NETMON_QA_VS_SVC", "tcp", 65433), out);
-    ssh.unwindToRootPrompt();
 
     ZyxelVirtualServerRule vs;
     vs.name = "NETMON_QA_VS";
@@ -4383,42 +4182,18 @@ TEST(LiveFirewallE5, WriteVirtualServerRollback) {
     vs.mapToIp = "192.0.2.2";
     vs.originalService = "NETMON_QA_VS_SVC";
     vs.mappedService = "NETMON_QA_VS_SVC";
-    vs.active = false;
+    vs.active = true;
+    runRestoredWrite(
+        "LiveFirewallE5", "WriteVirtualServerRollback",
+        "ip virtual-server NETMON_QA_VS", 6000.0,
+        {"configure terminal",
+         ZyxelObjectCmd::cmdAddService("NETMON_QA_VS_SVC", "tcp", 65433),
+         ZyxelNatCmd::cmdAddVirtualServer(vs)},
+        {ZyxelNatCmd::cmdDeleteVirtualServer("NETMON_QA_VS"),
+         ZyxelObjectCmd::cmdDeleteService("NETMON_QA_VS_SVC"),
+         "exit"},
+        ZyxelNatCmd::cmdShowVirtualServers(), "NETMON_QA_VS");
 
-    ssh.executeCommand("configure terminal", out);
-    SshResult resAdd = ssh.executeCommand(ZyxelNatCmd::cmdAddVirtualServer(vs), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resAdd));
-
-    ssh.executeCommand(ZyxelNatCmd::cmdShowVirtualServers(), out);
-    bool created = (out.find("virtual server: NETMON_QA_VS") != std::string::npos);
-
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelNatCmd::cmdDeleteVirtualServer("NETMON_QA_VS"), out);
-    ssh.executeCommand(ZyxelObjectCmd::cmdDeleteService("NETMON_QA_VS_SVC"), out);
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    ssh.executeCommand(ZyxelNatCmd::cmdShowVirtualServers(), out);
-    bool deleted = (out.find("virtual server: NETMON_QA_VS") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = (resAdd == SshResult::SUCCESS) && (resDel == SshResult::SUCCESS) &&
-                  created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE5", "WriteVirtualServerRollback", "ip virtual-server NETMON_QA_VS",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 // ============================================================================
@@ -4426,26 +4201,10 @@ TEST(LiveFirewallE5, WriteVirtualServerRollback) {
 // ============================================================================
 
 TEST_GROUP(LiveFirewallE6) {
-    void sweep() {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (!driver.isConnected()) return;
-        ZyxelSshClient &ssh = driver.getSshClient();
-        std::string out;
-        ssh.unwindToRootPrompt();
-        ssh.executeCommand("configure terminal", out);
-        ssh.executeCommand(ZyxelFirewallCmd::cmdDeleteRuleByName("NETMON_QA_RULE_E6"), out);
-        ssh.executeCommand(ZyxelObjectCmd::cmdDeleteAddress("NETMON_QA_HOST_E6"), out);
-        ssh.executeCommand("exit", out);
-        ssh.unwindToRootPrompt();
-    }
-
     void setup() override {
-        sweep();
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
     void teardown() override {
-        sweep();
     }
 };
 
@@ -4844,56 +4603,24 @@ TEST(LiveFirewallE6, DryFireDeviceHa2Invalid) {
 }
 
 TEST(LiveFirewallE6, WriteAppendSecurePolicyRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE6", "WriteAppendSecurePolicyRollback",
+        "secure-policy NETMON_QA_RULE_E6", 6000.0,
+        {"configure terminal",
+         "address-object NETMON_QA_HOST_E6 192.0.2.215",
+         "secure-policy append",
+         "no activate",
+         "name NETMON_QA_RULE_E6",
+         "sourceip NETMON_QA_HOST_E6",
+         "action deny",
+         "description E6 live append test",
+         "exit"},
+        {ZyxelFirewallCmd::cmdDeleteRuleByName("NETMON_QA_RULE_E6"),
+         ZyxelObjectCmd::cmdDeleteAddress("NETMON_QA_HOST_E6"),
+         "exit"},
+        ZyxelFirewallCmd::cmdShowSecurePolicy(), "NETMON_QA_RULE_E6");
 
-    // 1. Create dummy source address object
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand("address-object NETMON_QA_HOST_E6 192.0.2.215", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Append fast deny rule to the end of the rule table (NEVER insert 1)
-    ssh.executeCommand("configure terminal", out);
-    auto cmds = ZyxelFirewallCmd::cmdAppendFastDeny("NETMON_QA_RULE_E6", "NETMON_QA_HOST_E6", "E6 live append test");
-    for (const auto &c : cmds) {
-        ssh.executeCommand(c, out);
-    }
-    ssh.unwindToRootPrompt();
-
-    // 3. Verify rule creation
-    ssh.executeCommand(ZyxelFirewallCmd::cmdShowSecurePolicy(), out);
-    bool created = (out.find("name: NETMON_QA_RULE_E6") != std::string::npos);
-
-    // 4. Rollback: delete rule by name, then address object
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDelRule = ssh.executeCommand(ZyxelFirewallCmd::cmdDeleteRuleByName("NETMON_QA_RULE_E6"), out);
-    SshResult resDelObj = ssh.executeCommand(ZyxelObjectCmd::cmdDeleteAddress("NETMON_QA_HOST_E6"), out);
-    ssh.unwindToRootPrompt();
-
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDelRule));
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDelObj));
-
-    // 5. Verify clean deletion
-    ssh.executeCommand(ZyxelFirewallCmd::cmdShowSecurePolicy(), out);
-    bool deleted = (out.find("name: NETMON_QA_RULE_E6") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE6", "WriteAppendSecurePolicyRollback", "secure-policy append NETMON_QA_RULE_E6",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 // ============================================================================
@@ -4901,28 +4628,10 @@ TEST(LiveFirewallE6, WriteAppendSecurePolicyRollback) {
 // ============================================================================
 
 TEST_GROUP(LiveFirewallE7) {
-    void sweep() {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (!driver.isConnected()) return;
-        ZyxelSshClient &ssh = driver.getSshClient();
-        std::string out;
-        ssh.unwindToRootPrompt();
-        ssh.executeCommand("configure terminal", out);
-        ssh.executeCommand("bwm delete 2", out);
-        ssh.executeCommand(ZyxelSecurityCmd::cmdNoSslInspectionProfile("NETMON_QA_SSL_E7"), out);
-        ssh.executeCommand(ZyxelSecurityCmd::cmdNoAntiVirusProfile("NETMON_QA_AV_E7"), out);
-        ssh.executeCommand(ZyxelSecurityCmd::cmdNoAppProfile("NETMON_QA_APP_E7"), out);
-        ssh.executeCommand("exit", out);
-        ssh.unwindToRootPrompt();
-    }
-
     void setup() override {
-        sweep();
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
     void teardown() override {
-        sweep();
     }
 };
 
@@ -5602,142 +5311,44 @@ TEST(LiveFirewallE7, DryFireBwmOutOfRange) {
 }
 
 TEST(LiveFirewallE7, WriteBwmAppendRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE7", "WriteBwmAppendRollback",
+        "bwm NETMON_QA_BWM_E7", 6000.0,
+        {"configure terminal",
+         ZyxelSecurityCmd::cmdBwmAppend(),
+         "description NETMON_QA_BWM_E7",
+         "exit",
+         "exit"},
+        {"configure terminal", ZyxelSecurityCmd::cmdBwmDelete(2), "exit"},
+        ZyxelSecurityCmd::cmdShowBwmAll(), "NETMON_QA_BWM_E7");
 
-    // 1. Append BWM rule
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelSecurityCmd::cmdBwmAppend(), out);
-    ssh.executeCommand("description NETMON_QA_BWM_E7", out);
-    ssh.executeCommand("exit", out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelSecurityCmd::cmdShowBwmAll(), out);
-    bool created = (out.find("NETMON_QA_BWM_E7") != std::string::npos);
-
-    // 3. Rollback: delete rule 2
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelSecurityCmd::cmdBwmDelete(2), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelSecurityCmd::cmdShowBwmAll(), out);
-    bool deleted = (out.find("NETMON_QA_BWM_E7") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE7", "WriteBwmAppendRollback", "bwm append NETMON_QA_BWM_E7",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 TEST(LiveFirewallE7, WriteSslInspectionProfileRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE7", "WriteSslInspectionProfileRollback",
+        "ssl-inspection profile NETMON_QA_SSL_E7", 6000.0,
+        {"configure terminal",
+         ZyxelSecurityCmd::cmdSslInspectionProfile("NETMON_QA_SSL_E7"),
+         "exit"},
+        {ZyxelSecurityCmd::cmdNoSslInspectionProfile("NETMON_QA_SSL_E7"), "exit"},
+        ZyxelSecurityCmd::cmdShowSslInspectionProfile(), "NETMON_QA_SSL_E7");
 
-    // 1. Create SSL Inspection profile
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelSecurityCmd::cmdSslInspectionProfile("NETMON_QA_SSL_E7"), out);
-    ssh.executeCommand("exit", out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelSecurityCmd::cmdShowSslInspectionProfile(), out);
-    bool created = (out.find("profile name: NETMON_QA_SSL_E7") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelSecurityCmd::cmdNoSslInspectionProfile("NETMON_QA_SSL_E7"), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelSecurityCmd::cmdShowSslInspectionProfile(), out);
-    bool deleted = (out.find("profile name: NETMON_QA_SSL_E7") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE7", "WriteSslInspectionProfileRollback", "ssl-inspection profile NETMON_QA_SSL_E7",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 TEST(LiveFirewallE7, WriteAntiVirusProfileRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE7", "WriteAntiVirusProfileRollback",
+        "anti-virus profile NETMON_QA_AV_E7", 6000.0,
+        {"configure terminal",
+         ZyxelSecurityCmd::cmdAntiVirusProfile("NETMON_QA_AV_E7"),
+         "exit"},
+        {ZyxelSecurityCmd::cmdNoAntiVirusProfile("NETMON_QA_AV_E7"), "exit"},
+        ZyxelSecurityCmd::cmdShowAntiVirusProfile(), "NETMON_QA_AV_E7");
 
-    // 1. Create Anti-Virus profile
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelSecurityCmd::cmdAntiVirusProfile("NETMON_QA_AV_E7"), out);
-    ssh.executeCommand("exit", out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelSecurityCmd::cmdShowAntiVirusProfile(), out);
-    bool created = (out.find("name: NETMON_QA_AV_E7") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelSecurityCmd::cmdNoAntiVirusProfile("NETMON_QA_AV_E7"), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelSecurityCmd::cmdShowAntiVirusProfile(), out);
-    bool deleted = (out.find("name: NETMON_QA_AV_E7") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE7", "WriteAntiVirusProfileRollback", "anti-virus NETMON_QA_AV_E7",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 // ============================================================================
@@ -5746,32 +5357,9 @@ TEST(LiveFirewallE7, WriteAntiVirusProfileRollback) {
 
 TEST_GROUP(LiveFirewallE8) {
     void setup() override {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (driver.isConnected()) {
-            ZyxelSshClient &ssh = driver.getSshClient();
-            ssh.unwindToRootPrompt();
-            std::string out;
-            ssh.executeCommand("configure terminal", out);
-            ssh.executeCommand("no isakmp policy NETMON_QA_IKE_E8", out);
-            ssh.executeCommand("no sslvpn application NETMON_QA_SSLVPN_E8", out);
-            ssh.executeCommand("exit", out);
-            ssh.unwindToRootPrompt();
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
     void teardown() override {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (driver.isConnected()) {
-            ZyxelSshClient &ssh = driver.getSshClient();
-            ssh.unwindToRootPrompt();
-            std::string out;
-            ssh.executeCommand("configure terminal", out);
-            ssh.executeCommand("no isakmp policy NETMON_QA_IKE_E8", out);
-            ssh.executeCommand("no sslvpn application NETMON_QA_SSLVPN_E8", out);
-            ssh.executeCommand("exit", out);
-            ssh.unwindToRootPrompt();
-        }
     }
 };
 
@@ -6624,95 +6212,29 @@ TEST(LiveFirewallE8, DryFireInvalidSslvpnCommand) {
 }
 
 TEST(LiveFirewallE8, WriteIsakmpPolicyRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE8", "WriteIsakmpPolicyRollback",
+        "isakmp policy NETMON_QA_IKE_E8", 6000.0,
+        {"configure terminal",
+         ZyxelVpnCmd::cmdIsakmpPolicy("NETMON_QA_IKE_E8"),
+         "exit"},
+        {ZyxelVpnCmd::cmdNoIsakmpPolicy("NETMON_QA_IKE_E8"), "exit"},
+        ZyxelVpnCmd::cmdShowIsakmpPolicy(), "NETMON_QA_IKE_E8");
 
-    // 1. Create IKE policy
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelVpnCmd::cmdIsakmpPolicy("NETMON_QA_IKE_E8"), out);
-    ssh.executeCommand("exit", out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelVpnCmd::cmdShowIsakmpPolicy(), out);
-    bool created = (out.find("NETMON_QA_IKE_E8") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelVpnCmd::cmdNoIsakmpPolicy("NETMON_QA_IKE_E8"), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelVpnCmd::cmdShowIsakmpPolicy(), out);
-    bool deleted = (out.find("NETMON_QA_IKE_E8") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE8", "WriteIsakmpPolicyRollback", "isakmp policy NETMON_QA_IKE_E8",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 TEST(LiveFirewallE8, WriteSslvpnApplicationRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE8", "WriteSslvpnApplicationRollback",
+        "sslvpn application NETMON_QA_SSLVPN_E8", 6000.0,
+        {"configure terminal",
+         ZyxelVpnCmd::cmdSslvpnApplication("NETMON_QA_SSLVPN_E8"),
+         "exit"},
+        {ZyxelVpnCmd::cmdNoSslvpnApplication("NETMON_QA_SSLVPN_E8"), "exit"},
+        ZyxelVpnCmd::cmdShowSslvpnApplication(), "NETMON_QA_SSLVPN_E8");
 
-    // 1. Create SSL VPN application
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelVpnCmd::cmdSslvpnApplication("NETMON_QA_SSLVPN_E8"), out);
-    ssh.executeCommand("exit", out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelVpnCmd::cmdShowSslvpnApplication(), out);
-    bool created = (out.find("NETMON_QA_SSLVPN_E8") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelVpnCmd::cmdNoSslvpnApplication("NETMON_QA_SSLVPN_E8"), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelVpnCmd::cmdShowSslvpnApplication(), out);
-    bool deleted = (out.find("NETMON_QA_SSLVPN_E8") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE8", "WriteSslvpnApplicationRollback", "sslvpn application NETMON_QA_SSLVPN_E8",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 // ============================================================================
@@ -6721,32 +6243,9 @@ TEST(LiveFirewallE8, WriteSslvpnApplicationRollback) {
 
 TEST_GROUP(LiveFirewallE9) {
     void setup() override {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (driver.isConnected()) {
-            ZyxelSshClient &ssh = driver.getSshClient();
-            ssh.unwindToRootPrompt();
-            std::string out;
-            ssh.executeCommand("configure terminal", out);
-            ssh.executeCommand("no groupname NETMON_QA_GRP_E9", out);
-            ssh.executeCommand("no aaa group server radius NETMON_QA_AAA_E9", out);
-            ssh.executeCommand("exit", out);
-            ssh.unwindToRootPrompt();
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
     void teardown() override {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (driver.isConnected()) {
-            ZyxelSshClient &ssh = driver.getSshClient();
-            ssh.unwindToRootPrompt();
-            std::string out;
-            ssh.executeCommand("configure terminal", out);
-            ssh.executeCommand("no groupname NETMON_QA_GRP_E9", out);
-            ssh.executeCommand("no aaa group server radius NETMON_QA_AAA_E9", out);
-            ssh.executeCommand("exit", out);
-            ssh.unwindToRootPrompt();
-        }
     }
 };
 
@@ -7701,95 +7200,29 @@ TEST(LiveFirewallE9, DryFireInvalidAuthMethod) {
 }
 
 TEST(LiveFirewallE9, WriteGroupnameRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE9", "WriteGroupnameRollback",
+        "groupname NETMON_QA_GRP_E9", 6000.0,
+        {"configure terminal",
+         ZyxelAuthCmd::cmdGroupname("NETMON_QA_GRP_E9"),
+         "exit"},
+        {ZyxelAuthCmd::cmdNoGroupname("NETMON_QA_GRP_E9"), "exit"},
+        ZyxelAuthCmd::cmdShowGroupname("NETMON_QA_GRP_E9"), "NETMON_QA_GRP_E9");
 
-    // 1. Create group
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelAuthCmd::cmdGroupname("NETMON_QA_GRP_E9"), out);
-    ssh.executeCommand("exit", out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelAuthCmd::cmdShowGroupname("NETMON_QA_GRP_E9"), out);
-    bool created = (out.find("Group: NETMON_QA_GRP_E9") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelAuthCmd::cmdNoGroupname("NETMON_QA_GRP_E9"), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelAuthCmd::cmdShowGroupname("NETMON_QA_GRP_E9"), out);
-    bool deleted = (out.find("User group does not exist") != std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE9", "WriteGroupnameRollback", "groupname NETMON_QA_GRP_E9",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 TEST(LiveFirewallE9, WriteAaaGroupServerRadiusRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE9", "WriteAaaGroupServerRadiusRollback",
+        "aaa group server radius NETMON_QA_AAA_E9", 6000.0,
+        {"configure terminal",
+         ZyxelAuthCmd::cmdAaaGroupServerRadius("NETMON_QA_AAA_E9"),
+         "exit"},
+        {ZyxelAuthCmd::cmdNoAaaGroupServerRadius("NETMON_QA_AAA_E9"), "exit"},
+        ZyxelAuthCmd::cmdShowAaaGroupServerRadius("NETMON_QA_AAA_E9"), "NETMON_QA_AAA_E9");
 
-    // 1. Create AAA group server
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelAuthCmd::cmdAaaGroupServerRadius("NETMON_QA_AAA_E9"), out);
-    ssh.executeCommand("exit", out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Verify creation
-    ssh.executeCommand(ZyxelAuthCmd::cmdShowAaaGroupServerRadius("NETMON_QA_AAA_E9"), out);
-    bool created = (out.find("group attribute") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelAuthCmd::cmdNoAaaGroupServerRadius("NETMON_QA_AAA_E9"), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand(ZyxelAuthCmd::cmdShowAaaGroupServerRadius("NETMON_QA_AAA_E9"), out);
-    bool deleted = (out.find("group attribute") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE9", "WriteAaaGroupServerRadiusRollback", "aaa group server radius NETMON_QA_AAA_E9",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 // ============================================================================
@@ -7798,32 +7231,9 @@ TEST(LiveFirewallE9, WriteAaaGroupServerRadiusRollback) {
 
 TEST_GROUP(LiveFirewallE10) {
     void setup() override {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (driver.isConnected()) {
-            ZyxelSshClient &ssh = driver.getSshClient();
-            ssh.unwindToRootPrompt();
-            std::string out;
-            ssh.executeCommand("configure terminal", out);
-            ssh.executeCommand("no wlan-ssid-profile NETMON_QA_SSID_E10", out);
-            ssh.executeCommand("no wlan-security-profile NETMON_QA_SEC_E10", out);
-            ssh.executeCommand("exit", out);
-            ssh.unwindToRootPrompt();
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
     void teardown() override {
-        ZyxelDriver &driver = ZyxelDriver::getInstance();
-        if (driver.isConnected()) {
-            ZyxelSshClient &ssh = driver.getSshClient();
-            ssh.unwindToRootPrompt();
-            std::string out;
-            ssh.executeCommand("configure terminal", out);
-            ssh.executeCommand("no wlan-ssid-profile NETMON_QA_SSID_E10", out);
-            ssh.executeCommand("no wlan-security-profile NETMON_QA_SEC_E10", out);
-            ssh.executeCommand("exit", out);
-            ssh.unwindToRootPrompt();
-        }
     }
 };
 
@@ -8744,97 +8154,30 @@ TEST(LiveFirewallE10, DryFireCapwapApDiscoveryType) {
 }
 
 TEST(LiveFirewallE10, WriteWlanSsidProfileRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE10", "WriteWlanSsidProfileRollback",
+        "wlan-ssid-profile NETMON_QA_SSID_E10", 6000.0,
+        {"configure terminal",
+         ZyxelWlanCmd::cmdWlanSsidProfile("NETMON_QA_SSID_E10"),
+         "ssid NETMON_TEST_SSID",
+         "exit"},
+        {ZyxelWlanCmd::cmdNoWlanSsidProfile("NETMON_QA_SSID_E10"), "exit"},
+        "show wlan-ssid-profile NETMON_QA_SSID_E10", "NETMON_QA_SSID_E10");
 
-    // 1. Create SSID profile
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelWlanCmd::cmdWlanSsidProfile("NETMON_QA_SSID_E10"), out);
-    ssh.executeCommand("ssid NETMON_TEST_SSID", out);
-    ssh.executeCommand("exit", out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Verify creation
-    ssh.executeCommand("show wlan-ssid-profile NETMON_QA_SSID_E10", out);
-    bool created = (out.find("ssid profile: NETMON_QA_SSID_E10") != std::string::npos ||
-                    out.find("NETMON_TEST_SSID") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelWlanCmd::cmdNoWlanSsidProfile("NETMON_QA_SSID_E10"), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand("show wlan-ssid-profile NETMON_QA_SSID_E10", out);
-    bool deleted = (out.find("ssid profile: NETMON_QA_SSID_E10") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE10", "WriteWlanSsidProfileRollback", "wlan-ssid-profile NETMON_QA_SSID_E10",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 TEST(LiveFirewallE10, WriteWlanSecurityProfileRollback) {
-    ZyxelDriver &driver = ZyxelDriver::getInstance();
-    if (!driver.isConnected()) return;
-    ZyxelSshClient &ssh = driver.getSshClient();
 
-    auto t0 = std::chrono::steady_clock::now();
-    std::string out;
+    runRestoredWrite(
+        "LiveFirewallE10", "WriteWlanSecurityProfileRollback",
+        "wlan-security-profile NETMON_QA_SEC_E10", 6000.0,
+        {"configure terminal",
+         ZyxelWlanCmd::cmdWlanSecurityProfile("NETMON_QA_SEC_E10"),
+         "exit"},
+        {ZyxelWlanCmd::cmdNoWlanSecurityProfile("NETMON_QA_SEC_E10"), "exit"},
+        "show wlan-security-profile NETMON_QA_SEC_E10", "NETMON_QA_SEC_E10");
 
-    // 1. Create Security profile
-    ssh.executeCommand("configure terminal", out);
-    ssh.executeCommand(ZyxelWlanCmd::cmdWlanSecurityProfile("NETMON_QA_SEC_E10"), out);
-    ssh.executeCommand("exit", out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    // 2. Verify creation
-    ssh.executeCommand("show wlan-security-profile NETMON_QA_SEC_E10", out);
-    bool created = (out.find("security profile: NETMON_QA_SEC_E10") != std::string::npos);
-
-    // 3. Rollback
-    ssh.executeCommand("configure terminal", out);
-    SshResult resDel = ssh.executeCommand(ZyxelWlanCmd::cmdNoWlanSecurityProfile("NETMON_QA_SEC_E10"), out);
-    ssh.executeCommand("exit", out);
-    ssh.unwindToRootPrompt();
-
-    CHECK_EQUAL(static_cast<int>(SshResult::SUCCESS), static_cast<int>(resDel));
-
-    // 4. Verify clean deletion
-    ssh.executeCommand("show wlan-security-profile NETMON_QA_SEC_E10", out);
-    bool deleted = (out.find("security profile: NETMON_QA_SEC_E10") == std::string::npos);
-    auto t1 = std::chrono::steady_clock::now();
-
-    double rttMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    bool passed = created && deleted && (rttMs <= 6000.0);
-
-    ZyxelBenchmark::record({
-        "LiveFirewallE10", "WriteWlanSecurityProfileRollback", "wlan-security-profile NETMON_QA_SEC_E10",
-        rttMs, 0, out.size(), 1, passed,
-        passed ? "PASS (ROLLBACK)" : "FAIL"
-    });
-
-    CHECK_TRUE(created);
-    CHECK_TRUE(deleted);
-    CHECK_TRUE(rttMs <= 6000.0);
 }
 
 // ============================================================================
@@ -8873,46 +8216,7 @@ int __attribute__((weak)) runLiveFirewallDiagnostic(std::ostream &os,
 
     ZyxelBenchmark::clear();
 
-    auto mapEnvelope = [](const std::string &token) -> std::string {
-        std::string lower = token;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (lower == "e1") return "LiveFirewallE1";
-        if (lower == "e2") return "LiveFirewallE2";
-        if (lower == "e3") return "LiveFirewallE3";
-        if (lower == "e4") return "LiveFirewallE4";
-        if (lower == "e5") return "LiveFirewallE5";
-        if (lower == "e6") return "LiveFirewallE6";
-        if (lower == "e7") return "LiveFirewallE7";
-        if (lower == "e8") return "LiveFirewallE8";
-        if (lower == "e9") return "LiveFirewallE9";
-        if (lower == "e10") return "LiveFirewallE10";
-        return "";
-    };
-
-    std::vector<std::string> args = { "netmon_diag", "-v" };
-
-    std::string envFromFilter = mapEnvelope(filter);
-    std::string envFromMode = mapEnvelope(mode);
-
-    if (!envFromFilter.empty()) {
-        args.push_back("-sg");
-        args.push_back(envFromFilter);
-    } else if (!envFromMode.empty()) {
-        args.push_back("-sg");
-        args.push_back(envFromMode);
-    } else if (mode == "read") {
-        args.push_back("-sg");
-        args.push_back("LiveFirewallReadDiag");
-    } else if (mode == "write") {
-        args.push_back("-sg");
-        args.push_back("LiveFirewallWriteDiag");
-    }
-    // For "all" (and not an envelope token), omit -sg so CppUTest executes all registered groups
-
-    if (!filter.empty() && envFromFilter.empty()) {
-        args.push_back("-sn");
-        args.push_back(filter);
-    }
+    std::vector<std::string> args = buildDiagnosticArgv(mode, filter);
 
     std::vector<const char *> argv;
     for (const auto &arg : args) {

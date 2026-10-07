@@ -140,10 +140,11 @@ void NetMonShell::printHelp() const {
     std::cout << "  firewall status              Show firewall model, firmware, and connection" << std::endl;
     std::cout << "  firewall ping <host> [count] Run firewall-side ICMP diagnostic ping" << std::endl;
     std::cout << "  firewall traceroute <host>   Run firewall-side route trace" << std::endl;
-    std::cout << "  firewall set-password        Store firewall password in encrypted vault" << std::endl;
+    std::cout << "  firewall pin-hostkey         Show the router key and pin it" << std::endl;
+    std::cout << "  firewall set-password        Seal the firewall password in the vault" << std::endl;
     std::cout << "  firewall clear-password      Clear firewall password from encrypted vault" << std::endl;
     std::cout << "  firewall-clear-password      Alias for firewall clear-password" << std::endl;
-    std::cout << "  firewall diag [r|w|all] [flt]Run live qualification & benchmark suite" << std::endl;
+    std::cout << "  firewall diag [r|w|all] [flt] Read unchanged; write restores" << std::endl;
     std::cout << "  help                         Show this help message" << std::endl;
     std::cout << "  quit / exit                  Exit the shell" << std::endl;
 }
@@ -404,7 +405,9 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
     } else if (cmd == "firewall") {
         std::string subCmd;
         iss >> subCmd;
-        if (subCmd == "set-password") {
+        if (subCmd == "pin-hostkey") {
+            cmdFirewallPinHostkey();
+        } else if (subCmd == "set-password") {
             cmdFirewallSetPassword();
         } else if (subCmd == "clear-password") {
             cmdFirewallClearPassword();
@@ -444,7 +447,8 @@ int NetMonShell::executeCommand(const std::string &cmdLine) {
             }
             cmdFirewallDiag(mode, filter);
         } else {
-            std::cout << "Usage: firewall status | ping | traceroute | set-password | clear-password | diag" << std::endl;
+            std::cout << "Usage: firewall status | ping | traceroute | pin-hostkey" << std::endl;
+            std::cout << "       set-password | clear-password | diag" << std::endl;
         }
     } else if (cmd == "firewall-clear-password") {
         cmdFirewallClearPassword();
@@ -620,6 +624,40 @@ void NetMonShell::cmdAuthSetPassword(const std::string &currentPass, const std::
     }
 }
 
+void NetMonShell::cmdFirewallPinHostkey() {
+    ZyxelSshClient &client = ZyxelDriver::getInstance().getSshClient();
+    std::string fingerprint;
+    SshResult probed = client.probeHostKey(fingerprint);
+    if (probed != SshResult::SUCCESS) {
+        std::cout << "Failed to read the router host key." << std::endl;
+        return;
+    }
+    std::cout << "Router host key SHA256: " << fingerprint << std::endl;
+    std::cout << "Pin this key? [y/N] " << std::flush;
+    std::string answer;
+    if (!std::getline(std::cin, answer)) {
+        std::cout << "Not pinned." << std::endl;
+        return;
+    }
+    if (answer != "y" && answer != "Y" && answer != "yes") {
+        std::cout << "Not pinned." << std::endl;
+        return;
+    }
+    SshResult wrote = client.commitHostKeyPin(fingerprint);
+    if (wrote != SshResult::SUCCESS) {
+        std::cout << "Failed to write the host key pin." << std::endl;
+        return;
+    }
+    std::cout << "Host key pinned." << std::endl;
+}
+
+int NetMonShell::storeFirewallPassword(const std::string &password) {
+    if (password.empty() || !AuthManager::getInstance().setRouterPassword(password)) {
+        return 1;
+    }
+    return 0;
+}
+
 void NetMonShell::cmdFirewallSetPassword() {
     std::string pass = readPasswordInteractive("Enter Zyxel firewall password: ");
     if (pass.empty()) {
@@ -631,11 +669,11 @@ void NetMonShell::cmdFirewallSetPassword() {
         std::cout << "Passwords do not match." << std::endl;
         return;
     }
-    if (AuthManager::getInstance().setRouterPassword(pass)) {
-        std::cout << "Firewall password stored securely in encrypted vault (vault.enc)." << std::endl;
-    } else {
+    if (storeFirewallPassword(pass) != 0) {
         std::cout << "Error: Failed to store firewall password in vault." << std::endl;
+        return;
     }
+    std::cout << "Firewall password stored securely in encrypted vault (vault.enc)." << std::endl;
 }
 
 void NetMonShell::cmdFirewallClearPassword() {

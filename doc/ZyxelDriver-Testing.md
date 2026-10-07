@@ -19,19 +19,11 @@ To ensure continuous, safe testing in production and development environments, `
 ### 1.1 The Zero-Mock Live Qualification Standard
 Unit test mocks and simulated transcripts are valuable for basic parser validation, but they cannot prove physical reliability against firmware nuances (e.g. VT100 escape codes, submode transitions, PTY line buffering, latency under load). All live diagnostic test cases (`LiveFirewallReadDiag`, `LiveFirewallWriteDiag`) execute exclusively over an active, authenticated SSH channel (`ZyxelDriver::getInstance().getSshClient()`) against physical gateway hardware.
 
-### 1.2 Volatile-Only RAM Mutation Rule (Zero NVRAM Flash Writes)
-The physical Zyxel gateway stores its active state in RAM (`running-config`) and its persistent state in eMMC/NAND flash memory (`startup-config`). 
-- **The ZySH `write` command is strictly prohibited during automated test suites.**
-- All test modifications exist solely in volatile RAM.
-- Even if a catastrophic failure or panic were to interrupt a test mid-execution, a device power-cycle would completely discard all ephemeral test objects and restore the certified `startup-config`.
-- Flash write operations are reserved exclusively for the production driver's 30-second quiescence debounce engine when explicitly enabled by the operator (`router_flash_write = true`).
+### 1.2 No flash save
+The ZySH `write` command is not sent by netmon and is prohibited in every test. Netmon does not journal router commands and does not replay them.
 
-### 1.3 Strict Whitelisting of Reversible Write Operations
-- **Only simple, easily and trivially undoable write commands are qualified for live execution.**
-- Every test mutation must be reversible with a single, standalone undo command (e.g. `no address-object <name>`, `no service-object <name>`, `no ip virtual-server <name>`).
-- If an operation requires a complex, multi-step rollback scheme, conditional state recovery, or cascading reconciliations: **It is strictly forbidden from live write testing.**
-- For all other write commands across the 666-page ZySH manual, testing is strictly confined to **syntax error handling**—sending intentionally malformed inputs to verify `% Parse error` rejection without causing any router state mutation.
-- All live test mutations use isolated RFC 5737 documentation IP prefixes (`192.0.2.0/24`) and high-range ephemeral ports ($\ge 65430$) to prevent interference with live LAN or WAN traffic.
+### 1.3 Diagnostic writes
+`firewall diag` with no mode, and read mode, send no configuration. `firewall diag write` must restore each object it creates. That restore is not in this build yet. Do not run `firewall diag write` on the router until it is. A failed production command stops and is not undone.
 
 ---
 
@@ -65,25 +57,14 @@ The table below catalogs every command implemented, tested, or evaluated within 
 | `show zone` | Network | Read | `ZyxelNetworkCmdTest.ParseZones*` | Offline Unit Only | None (Read-only) | **Zero Risk**: Reads security zone mappings (WAN, LAN, DMZ). |
 | `show arp-table` | Network | Read | `ZyxelNetworkCmdTest.ParseArp*` | Offline Unit Only | None (Read-only) | **Zero Risk**: Reads ARP cache table entries. |
 | `show address-object` | Object | Read | `LiveFirewallReadDiag.ReadAddressObjects`<br>`ZyxelObjectCmdTest.ParseAddressObjects*` | Live Physical + Offline Unit | None (Read-only) | **Zero Risk**: Reads all configured host, range, and subnet address objects. |
-| `address-object <name> <ip>` (Host) | Object | Safe Write | `LiveFirewallWriteDiag.WriteAddressHostRollback` | Live Physical (Whitelisted) | `no address-object <name>` | **QUALIFIED SAFE WRITE**: Standalone host object on RFC 5737 dummy IP (`192.0.2.201`). Trivial 1-step undo. |
-| `address-object <name> <start>-<end>` (Range) | Object | Safe Write | `LiveFirewallWriteDiag.WriteAddressRangeRollback` | Live Physical (Whitelisted) | `no address-object <name>` | **QUALIFIED SAFE WRITE**: Standalone range object (`192.0.2.202-205`). Trivial 1-step undo. |
-| `address-object <name> <ip>/<cidr>` (Subnet) | Object | Safe Write | `LiveFirewallWriteDiag.WriteAddressSubnetRollback` | Live Physical (Whitelisted) | `no address-object <name>` | **QUALIFIED SAFE WRITE**: Standalone subnet object (`192.0.2.224/28`). Trivial 1-step undo. |
-| `no address-object <name>` | Object | Safe Write | `LiveFirewallWriteDiag.*` | Live Physical (Whitelisted) | N/A (Cleanup action) | **QUALIFIED SAFE WRITE**: Standard deletion command. (Only executed on test-created objects). |
 | `show service-object` | Object | Read | `LiveFirewallReadDiag.ReadServiceObjects`<br>`ZyxelObjectCmdTest.ParseServiceObjects*` | Live Physical + Offline Unit | None (Read-only) | **Zero Risk**: Reads all configured custom and standard TCP/UDP service objects. |
-| `service-object <name> tcp eq <port>` | Object | Safe Write | `LiveFirewallWriteDiag.WriteServiceTcpRollback` | Live Physical (Whitelisted) | `no service-object <name>` | **QUALIFIED SAFE WRITE**: Standalone custom TCP service (port 65432). Trivial 1-step undo. |
-| `service-object <name> udp eq <port>` | Object | Safe Write | `LiveFirewallWriteDiag.WriteServiceUdpRollback` | Live Physical (Whitelisted) | `no service-object <name>` | **QUALIFIED SAFE WRITE**: Standalone custom UDP service (port 65432). Trivial 1-step undo. |
-| `no service-object <name>` | Object | Safe Write | `LiveFirewallWriteDiag.*` | Live Physical (Whitelisted) | N/A (Cleanup action) | **QUALIFIED SAFE WRITE**: Standard deletion command for test services. |
 | `show object-group address` | Object | Read | `ZyxelObjectCmdTest.ParseAddressGroups*` | Offline Unit Only | None (Read-only) | **Zero Risk**: Reads address object group memberships. |
 | `show object-group service` | Object | Read | `ZyxelObjectCmdTest.CommandGenerators` | Offline Unit Only | None (Read-only) | **Zero Risk**: Reads service object group memberships. |
 | `address-group <grp> add <mem>` | Object | Write | `ZyxelObjectCmdTest.CommandGenerators` | **EXCLUDED (No Live Write)** | `no address-group <grp> <mem>` | **MEDIUM RISK (Group Mutation)**: Excluded from live test to prevent mutating production groups (e.g. `Blocked_Hosts`) or creating dangling dependencies. |
 | `show secure-policy` | Firewall | Read | `LiveFirewallReadDiag.ReadFirewallRules`<br>`ZyxelFirewallCmdTest.ParseSecurePolicy*` | Live Physical + Offline Unit | None (Read-only) | **Zero Risk**: Reads packet filter rules, priorities, zones, and status. |
-| `secure-policy insert 1` (Fast-Deny) | Firewall | Safe Write | `LiveFirewallWriteDiag.WriteFastDenyRuleRollback` | Live Physical (Whitelisted) | `no secure-policy <name>`<br>`no address-object <name>` | **QUALIFIED SAFE WRITE**: Tested strictly with dummy source IP (`192.0.2.210`). Deletes rule first, then object. |
-| `driver.blockIp` / `driver.unblockIp` | Firewall | Safe Write | `LiveFirewallWriteDiag.DriverBlockIpAndUnblockIp` | Live Physical (Whitelisted) | `driver.unblockIp` | **QUALIFIED SAFE WRITE**: Tests full high-level driver quarantine pipeline using dummy RFC 5737 IP (`192.0.2.220`). |
 | `secure-policy default-action deny` | Firewall | Write | None | **EXCLUDED (No Live Write)** | N/A | **CRITICAL RISK (Complete Lockout)**: Changes global firewall policy to drop unmatched packets, breaking all communication. |
 | `secure-policy insert <pos>` (General) | Firewall | Write | `ZyxelFirewallCmdTest.CommandGenerators` | **EXCLUDED (No Live Write)** | N/A | **HIGH RISK (Traffic Drop)**: Arbitrary rule insertions can intercept management traffic or break routing between zones. |
 | `show ip virtual-server` | NAT | Read | `LiveFirewallReadDiag.ReadVirtualServers`<br>`ZyxelNatCmdTest.ParseVirtualServers*` | Live Physical + Offline Unit | None (Read-only) | **Zero Risk**: Reads active port forwarding / virtual server table. |
-| `ip virtual-server <name> ...` | NAT | Safe Write | `LiveFirewallWriteDiag.WriteVirtualServerRollback` | Live Physical (Whitelisted) | `no ip virtual-server <name>`<br>`no service-object <name>` | **QUALIFIED SAFE WRITE**: Confined strictly to test service (port 65433) and dummy RFC 5737 IP (`192.0.2.1` -> `192.0.2.2`). |
-| `no ip virtual-server <name>` | NAT | Safe Write | `LiveFirewallWriteDiag.*` | Live Physical (Whitelisted) | N/A (Cleanup action) | **QUALIFIED SAFE WRITE**: Deletes virtual server rule. |
 | Global SNAT / 1:1 NAT Configuration | NAT | Write | None | **EXCLUDED (No Live Write)** | N/A | **HIGH RISK (WAN Outage)**: Mutating live WAN NAT pools breaks outbound connectivity for all LAN clients. |
 | `show app-statistics summary` | Security | Read | `TestZyxelSecurityCmd` | Offline Unit Only | None (Read-only) | **Zero Risk**: Reads Application Patrol traffic analytics. |
 | `show idp-statistics summary` | Security | Read | `TestZyxelSecurityCmd` | Offline Unit Only | None (Read-only) | **Zero Risk**: Reads IDP / IPS attack detection statistics. |
@@ -92,50 +73,11 @@ The table below catalogs every command implemented, tested, or evaluated within 
 | `ip http/https port <p>` | Admin | Write | None | **EXCLUDED (No Live Write)** | N/A | **HIGH RISK (Management Lockout)**: Alters web management listening ports. |
 | `ip ssh port <p>` | Admin | Write | None | **CRITICAL RISK (Channel Severed)** | **EXCLUDED (No Live Write)** | N/A | Changing SSH port severs the active driver connection permanently. |
 | `device-ha ...` | High Avail | Write | None | **EXCLUDED (No Live Write)** | N/A | **HIGH RISK (Split-Brain)**: Triggering device failover or sync operations disrupts cluster state. |
-| Invalid Command Syntax (`address-object INVALID???`) | Submode | Error Test | `LiveFirewallWriteDiag.SyntaxErrorUnwindAndRecovery` | Live Physical (Whitelisted) | Prompt Unwind Guard (`unwindToRootPrompt`) | **QUALIFIED SAFE ERROR TEST**: Injects intentional syntax error to verify parser rejection and submode recovery. |
-| Transparent Config Wrapping | Automation | Safe Write | `LiveFirewallWriteDiag.ConfigModeWrapping` | Live Physical (Whitelisted) | `no address-object NETMON_QA_WRAP` | **QUALIFIED SAFE WRITE**: Tests driver automatic `configure terminal` wrapping and root prompt unwinding. |
-
 ---
 
-## 3. The Qualified Safe Write Whitelist
+## 3. Diagnostic writes
 
-The live write diagnostic suite (`LiveFirewallWriteDiag`) is deliberately restricted to a minimal, strictly verified set of non-destructive operations. Each whitelisted test satisfies four mandatory qualification criteria:
-
-1. **Zero Impact on Operational Traffic**: Targets solely dummy RFC 5737 addresses (`192.0.2.x`) or ephemeral ports ($\ge 65432$) that carry zero live packets.
-2. **Atomic Single-Step Reversibility**: The modification can be 100% reversed using a simple `no <object>` statement.
-3. **No NVRAM Persistence**: The test never executes `write`; all changes remain strictly in volatile RAM.
-4. **Guaranteed RAII Cleanup**: Even if an assertion fails midway through a test, the test fixture's `teardown()` method and the `ZyxelPromptUnwindGuard` unwind submodes and delete all `NETMON_QA_*` objects.
-
-### 3.1 The 10 Qualified Live Write Diagnostics
-
-```text
-+--------------------------------------------------------------------------------------------------+
-|                            QUALIFIED SAFE WRITE DIAGNOSTIC SUITE                                 |
-+----+--------------------------------+----------------------------+-------------------------------+
-| ID | Test Name                      | Mutation Target            | Deterministic Rollback Action |
-+----+--------------------------------+----------------------------+-------------------------------+
-| 1  | WriteAddressHostRollback       | Host: 192.0.2.201          | no address-object             |
-| 2  | WriteAddressRangeRollback      | Range: 192.0.2.202-205     | no address-object             |
-| 3  | WriteAddressSubnetRollback     | Subnet: 192.0.2.224/28     | no address-object             |
-| 4  | WriteServiceTcpRollback        | TCP Service: port 65432    | no service-object             |
-| 5  | WriteServiceUdpRollback        | UDP Service: port 65432    | no service-object             |
-| 6  | WriteVirtualServerRollback     | NAT VS: 192.0.2.1:65433    | no ip virtual-server + no svc |
-| 7  | WriteFastDenyRuleRollback      | Rule 1: Drop 192.0.2.210   | no secure-policy + no addr    |
-| 8  | DriverBlockIpAndUnblockIp      | Driver Quarantine: .220    | driver.unblockIp (.220)       |
-| 9  | ConfigModeWrapping             | Auto-wrapped Host: .221    | driver clearance no addr      |
-| 10 | SyntaxErrorUnwindAndRecovery   | Intentionally malformed    | unwindToRootPrompt()          |
-+----+--------------------------------+----------------------------+-------------------------------+
-```
-
-### 3.2 Inverse-Dependency Sweeper Protocol
-When deleting Zyxel configuration objects, the firmware enforces referential integrity: attempting to delete an address object that is currently referenced by a security policy returns `% retval = -43037`. 
-
-To prevent test flakiness or orphaned objects, the `setup()` and `teardown()` fixtures in `LiveFirewallWriteDiag` execute an inverse-dependency sweep:
-1. **Firewall Rules**: Inspects `show secure-policy` and removes all rules with prefix `NETMON_`.
-2. **Virtual Servers**: Removes NAT rules (`no ip virtual-server NETMON_QA_VS`).
-3. **Address Groups**: Unbinds group memberships.
-4. **Leaf Objects**: Safely deletes address objects (`NETMON_QA_HOST`, `NETMON_QA_RNG`, etc.) and service objects (`NETMON_QA_TCP`, `NETMON_QA_UDP`).
-5. **Prompt Unwind**: Issues exit commands until the root prompt (`Router#` or `Router>`) is reached.
+Read diagnostics stay in the catalog above. `firewall diag write` is not a license to leave objects on the router. Each write must be followed by a restore to the state before that command. That behavior is not in this build yet.
 
 ---
 

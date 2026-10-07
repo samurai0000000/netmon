@@ -216,30 +216,16 @@ nlohmann::json SecurityCheckpoint::handleAgentMutation(const std::string &tool,
     }
 
     if (mode == PolicyMode::Live) {
-        std::string reason = payload.value("reason", "");
-        nlohmann::json routerRes;
-        if (tool == "firewall_block_ip" || tool == "blockIp") {
-            routerRes = ZyxelDriver::getInstance().blockIp(ip, reason);
-        } else if (tool == "firewall_unblock_ip" || tool == "unblockIp") {
-            routerRes = ZyxelDriver::getInstance().unblockIp(ip);
-        } else {
-            return {{"status", "error"}, {"error", "Unknown mutation tool: " + tool}};
+        int ttl = payload.value("ttl", 3600);
+        int64_t ticketId = enqueuePendingAction(tool, requester, payload, ttl);
+        if (ticketId <= 0) {
+            return {{"status", "error"}, {"error", "Failed to enqueue pending action"}};
         }
-
-        bool success = (routerRes.value("status", "") == "success");
-        AuditOutboxRecord auditRec;
-        auditRec.timestamp = time(nullptr);
-        auditRec.prevHash = getNextPrevHash();
-        auditRec.actionId = 0;
-        auditRec.tool = tool;
-        auditRec.requester = requester;
-        auditRec.payload = payload.dump();
-        auditRec.decision = success ? "approved" : "failed";
-        auditRec.reason = success ? "Live execution permitted" : "Router execution failed";
-        auditRec.exported = 0;
-        SnmpDatabase::getInstance().insertAuditOutbox(auditRec);
-        projectAuditFile();
-        return routerRes;
+        return {
+            {"status", "pending"},
+            {"ticket_id", ticketId},
+            {"message", "Mutation enqueued for human approval"}
+        };
     }
 
     return {{"status", "error"}, {"error", "Invalid policy mode"}};
@@ -315,8 +301,13 @@ bool SecurityCheckpoint::approve(int64_t ticketId, std::string &outError) {
     bool success = (routerRes.value("status", "") == "success");
     AuditOutboxRecord auditRec;
     std::string prevHash = getNextPrevHash();
+    std::string note = "Operator approved";
+    if (routerRes.contains("show") && routerRes["show"].is_string() &&
+        !routerRes["show"].get<std::string>().empty()) {
+        note = routerRes["show"].get<std::string>();
+    }
     if (success) {
-        SnmpDatabase::getInstance().commitActionApproved(ticketId, prevHash, "Operator approved", auditRec);
+        SnmpDatabase::getInstance().commitActionApproved(ticketId, prevHash, note, auditRec);
         projectAuditFile();
         return true;
     } else {

@@ -7,6 +7,8 @@
 #ifndef NETMON_ZYXEL_LIVE_DIAGNOSTIC_HXX
 #define NETMON_ZYXEL_LIVE_DIAGNOSTIC_HXX
 
+#include "ZyxelSshClient.hxx"
+
 #include <string>
 #include <vector>
 #include <ostream>
@@ -46,6 +48,51 @@ public:
 int runLiveFirewallDiagnostic(std::ostream &os,
                              const std::string &mode = "read",
                              const std::string &filter = "");
+
+std::string diagLogPath();
+void logDiag(const std::string &msg);
+bool diagnosticLineIsConfig(const std::string &line);
+std::vector<std::string> diagnosticReadCatalog();
+std::vector<std::string> buildDiagnosticArgv(const std::string &mode,
+                                             const std::string &filter);
+
+class ZyxelDriver;
+
+class DiagRestoreBracket {
+public:
+    DiagRestoreBracket(ZyxelDriver &driver,
+                       std::vector<std::string> inverse,
+                       std::string showCommand,
+                       std::string objectToken);
+    ~DiagRestoreBracket();
+
+    SshResult send(const std::string &line);
+    void restoreByUnblock(const std::string &ip);
+    void ensureConfigMode();
+    void restore();
+    void dismiss();
+
+    bool restored() const { return _restored; }
+    bool restoreSucceeded() const { return _restoreSucceeded; }
+    bool objectGone() const { return _objectGone; }
+    bool policyAborted() const { return _policyAborted; }
+    const std::string &showOutput() const { return _showOutput; }
+    const std::string &restoreError() const { return _restoreError; }
+
+private:
+    ZyxelDriver &_driver;
+    std::vector<std::string> _inverse;
+    std::string _showCommand;
+    std::string _objectToken;
+    std::string _unblockIp;
+    std::string _showOutput;
+    std::string _restoreError;
+    bool _restored;
+    bool _restoreSucceeded;
+    bool _objectGone;
+    bool _policyAborted;
+    bool _awaitingNoActivate;
+};
 
 #endif /* NETMON_ZYXEL_LIVE_DIAGNOSTIC_HXX */
 

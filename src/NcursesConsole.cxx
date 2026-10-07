@@ -14,6 +14,8 @@
 #include "NetMonShell.hxx"
 #include "AiSecurityClearance.hxx"
 #include "UnixAuth.hxx"
+#include "ZyxelSshClient.hxx"
+#include <openssl/crypto.h>
 #include <sstream>
 #include <iomanip>
 #include <iostream>
@@ -545,7 +547,14 @@ void NcursesConsole::redrawInputLine() {
     wrefresh(_inputWin);
 }
 
-std::string NcursesConsole::promptPassword(const std::string &promptMsg) {
+static void cleanseInput(std::string &value) {
+    if (!value.empty()) {
+        OPENSSL_cleanse(&value[0], value.size());
+    }
+    std::string().swap(value);
+}
+
+std::string NcursesConsole::promptPassword(const std::string &promptMsg, bool hide) {
     std::string password;
     while (_running.load()) {
         wmove(_inputWin, 0, 0);
@@ -554,12 +563,12 @@ std::string NcursesConsole::promptPassword(const std::string &promptMsg) {
         wattroff(_inputWin, COLOR_PAIR(PAIR_WARN) | A_BOLD);
         wclrtoeol(_inputWin);
 
-        std::string stars(password.size(), '*');
+        std::string shown = hide ? std::string(password.size(), '*') : password;
         wattron(_inputWin, COLOR_PAIR(PAIR_TEXT));
-        wprintw(_inputWin, "%s", stars.c_str());
+        wprintw(_inputWin, "%s", shown.c_str());
         wattroff(_inputWin, COLOR_PAIR(PAIR_TEXT));
 
-        int cursorCol = std::min(_termCols - 1, static_cast<int>(promptMsg.size() + stars.size()));
+        int cursorCol = std::min(_termCols - 1, static_cast<int>(promptMsg.size() + shown.size()));
         wmove(_inputWin, 0, cursorCol);
         wrefresh(_inputWin);
 
@@ -744,6 +753,58 @@ void NcursesConsole::processCommand(const std::string &line) {
         renderMiddlePanel();
         redrawInputLine();
         return;
+    }
+
+    if (commandName == "firewall") {
+        std::istringstream fiss(trimmed);
+        std::string fwCmd;
+        std::string fwSub;
+        fiss >> fwCmd >> fwSub;
+        if (fwSub == "set-password") {
+            std::string pass = promptPassword("Enter Zyxel firewall password: ");
+            std::string confirm;
+            if (!pass.empty()) {
+                confirm = promptPassword("Confirm Zyxel firewall password: ");
+            }
+            if (pass.empty()) {
+                addOutputLine("Firewall password cannot be empty.", PAIR_WARN, true);
+            } else if (pass != confirm) {
+                addOutputLine("Passwords do not match.", PAIR_WARN, true);
+            } else if (NetMonShell::getInstance().storeFirewallPassword(pass) != 0) {
+                addOutputLine("Error: Failed to store firewall password in vault.", PAIR_WARN, true);
+            } else {
+                addOutputLine("Firewall password stored securely in encrypted vault (vault.enc).", PAIR_INFO, true);
+            }
+            cleanseInput(pass);
+            cleanseInput(confirm);
+            renderMiddlePanel();
+            redrawInputLine();
+            return;
+        }
+        if (fwSub == "pin-hostkey") {
+            ZyxelSshClient &client = ZyxelDriver::getInstance().getSshClient();
+            std::string fingerprint;
+            SshResult probed = client.probeHostKey(fingerprint);
+            if (probed != SshResult::SUCCESS) {
+                addOutputLine("Failed to read the router host key.", PAIR_WARN, true);
+                renderMiddlePanel();
+                redrawInputLine();
+                return;
+            }
+            addOutputLine("Router host key SHA256: " + fingerprint, PAIR_INFO, false);
+            renderMiddlePanel();
+            std::string answer = promptPassword("Pin this key? [y/N] ", false);
+            if (answer != "y" && answer != "Y" && answer != "yes") {
+                addOutputLine("Not pinned.", PAIR_WARN, false);
+            } else if (client.commitHostKeyPin(fingerprint) != SshResult::SUCCESS) {
+                addOutputLine("Failed to write the host key pin.", PAIR_WARN, true);
+            } else {
+                addOutputLine("Host key pinned.", PAIR_INFO, true);
+            }
+            renderMiddlePanel();
+            redrawInputLine();
+            return;
+        }
     }
 
     // Set state to EXECUTING and spawn background worker thread

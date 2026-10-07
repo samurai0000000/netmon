@@ -5,6 +5,7 @@
  */
 
 #include "AiSecurityClearance.hxx"
+#include "ZyxelSshClient.hxx"
 
 #include <string>
 #include <vector>
@@ -88,7 +89,7 @@ bool AiSecurityClassifier::isControlOrChained(const std::string &line) {
         if (uc < 32 || uc == 127) {
             return true;
         }
-        if (c == ';' || c == '&' || c == '|' || c == '`' || c == '$' || c == '<' || c == '>') {
+        if (c == '?' || c == ';' || c == '&' || c == '|' || c == '`' || c == '$' || c == '<' || c == '>') {
             return true;
         }
     }
@@ -207,25 +208,26 @@ bool AiSecurityClassifier::isMaskValid(const std::string &maskStr) {
 }
 
 bool AiSecurityClassifier::isRootPrompt(const std::string &prompt) {
-    if (prompt.empty()) {
-        return true;
-    }
-    if (prompt.find("(config") != std::string::npos) {
+    PromptState state = PromptState::UNKNOWN;
+    if (!ZyxelSshClient::classifyPromptLine(prompt, state)) {
         return false;
     }
-    char last = prompt.back();
-    return (last == '>' || last == '#');
+    return state == PromptState::ROOT;
 }
 
 bool AiSecurityClassifier::isSecurePolicySubmode(const std::string &prompt) {
-    return (prompt.find("(config-secure-policy") != std::string::npos ||
-            prompt.find("(config-submode") != std::string::npos);
+    PromptState state = PromptState::UNKNOWN;
+    if (!ZyxelSshClient::classifyPromptLine(prompt, state)) {
+        return false;
+    }
+    return state == PromptState::POLICY_SUBMODE;
 }
 
 LineClassification AiSecurityClassifier::classify(const std::string &line,
                                                  const std::string &currentPrompt,
                                                  int &timeoutMsOut,
-                                                 std::string &matchedMethodOut) {
+                                                 std::string &matchedMethodOut,
+                                                 bool policyInactiveAcked) {
     timeoutMsOut = 5000;
     matchedMethodOut = "UNCLASSIFIED";
 
@@ -259,17 +261,24 @@ LineClassification AiSecurityClassifier::classify(const std::string &line,
     // Only accepted while in secure-policy submode
     // -------------------------------------------------------------
     if (inSubmode) {
-        if (tokens.size() == 1 && tokens[0] == "exit") {
-            matchedMethodOut = "cmdInsertRule";
-            return LineClassification::LEVEL2_SUBMODE;
+        if (!policyInactiveAcked) {
+            if (tokens.size() == 2 && tokens[0] == "no" && tokens[1] == "activate") {
+                matchedMethodOut = "cmdInsertRule";
+                return LineClassification::LEVEL2_SUBMODE;
+            }
+            return LineClassification::UNCLASSIFIED;
         }
-        if (tokens.size() == 1 && (tokens[0] == "activate" || tokens[0] == "deactivate")) {
+        if (tokens.size() == 1 && tokens[0] == "activate") {
             matchedMethodOut = "cmdInsertRule";
             return LineClassification::LEVEL2_SUBMODE;
         }
         if (tokens.size() == 2) {
             const std::string &verb = tokens[0];
             const std::string &arg = tokens[1];
+            if (verb == "no" && arg == "activate") {
+                matchedMethodOut = "cmdInsertRule";
+                return LineClassification::LEVEL2_SUBMODE;
+            }
             if (verb == "name" && isNameValid(arg)) {
                 matchedMethodOut = "cmdInsertRule";
                 return LineClassification::LEVEL2_SUBMODE;
@@ -550,8 +559,16 @@ LineClassification AiSecurityClassifier::classify(const std::string &line,
                 matchedMethodOut = "cmdDeleteService";
                 return LineClassification::LEVEL2_ROOT;
             }
-            if (tokens[1] == "secure-policy" && (isPositionValid(tokens[2]) || isNameValid(tokens[2]))) {
+            if (tokens[1] == "secure-policy" && isPositionValid(tokens[2])) {
                 matchedMethodOut = "cmdDeleteRule";
+                return LineClassification::LEVEL2_ROOT;
+            }
+            if ((tokens[1] == "wlan-security-profile" ||
+                 tokens[1] == "wlan-ssid-profile" ||
+                 tokens[1] == "groupname" ||
+                 tokens[1] == "anti-virus") &&
+                isNameValid(tokens[2])) {
+                matchedMethodOut = "cmdDeleteNamedObject";
                 return LineClassification::LEVEL2_ROOT;
             }
             if (tokens[1] == "ip" && tokens[2] == "virtual-server") {
@@ -570,7 +587,29 @@ LineClassification AiSecurityClassifier::classify(const std::string &line,
                 matchedMethodOut = "cmdDeleteVirtualServer";
                 return LineClassification::LEVEL2_ROOT;
             }
+            if ((tokens[1] == "sslvpn" && tokens[2] == "application") ||
+                (tokens[1] == "isakmp" && tokens[2] == "policy") ||
+                (tokens[1] == "ssl-inspection" && tokens[2] == "profile") ||
+                (tokens[1] == "object-group" && tokens[2] == "address6")) {
+                if (isNameValid(tokens[3])) {
+                    matchedMethodOut = "cmdDeleteNamedObject";
+                    return LineClassification::LEVEL2_ROOT;
+                }
+                return LineClassification::UNCLASSIFIED;
+            }
+        } else if (tokens.size() == 5) {
+            if (tokens[1] == "ip" && tokens[2] == "ddns" &&
+                tokens[3] == "profile" && isNameValid(tokens[4])) {
+                matchedMethodOut = "cmdDeleteNamedObject";
+                return LineClassification::LEVEL2_ROOT;
+            }
         } else if (tokens.size() == 6) {
+            if (tokens[1] == "aaa" && tokens[2] == "group" &&
+                tokens[3] == "server" && tokens[4] == "radius" &&
+                isNameValid(tokens[5])) {
+                matchedMethodOut = "cmdDeleteNamedObject";
+                return LineClassification::LEVEL2_ROOT;
+            }
             if (tokens[1] == "ip" && tokens[2] == "route" &&
                 isIpv4Valid(tokens[3]) && isMaskValid(tokens[4]) && isIpv4Valid(tokens[5])) {
                 matchedMethodOut = "cmdDeleteRoute";

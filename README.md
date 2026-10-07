@@ -27,7 +27,6 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
   - `sysUpTime` tracking to detect device reboots and eliminate false delta spikes.
   - 3-tier interface filtering suppresses virtual, down, and loopback noise, isolating active physical ports and WAN uplinks.
 - **Persistent SQLite Time-Series Database (`SnmpDatabase`)**:
-  - High-performance WAL mode (`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;`).
   - Retains uncompressed raw 30-second samples for 90 days (`~50 MB` total footprint) for forensic rate spike analysis.
   - Automated hourly rollups (`snmp_hourly_rollups`) for multi-year trend analysis and capacity planning.
 - **Embedded Web Server & Live Dashboard**:
@@ -42,7 +41,7 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
   - Omits `CAP_NET_ADMIN` to ensure the process cannot alter routing tables, interface IPs, or host firewall rules.
   - Configuration directory is enforced to `0700` (`drwx------`) and files to `0600` (`-rw-------`).
   - Router credentials reside solely in `AuthManager`'s AES-256-GCM encrypted vault (`~/.config/netmon/vault.enc`), provisioned interactively via `router set-password`. Plaintext config passwords and `NETMON_ROUTER_PASSWORD` environment overrides are not supported.
-  - Zyxel USG/ATP firewall integration is **Production Qualified on USG FLEX 200** (see [`ZyxelDriver.md`](ZyxelDriver.md) for full architecture and command catalog). Defaults to safe mode (`router_live_enabled = false`, `router_flash_write = false`) unless explicitly enabled by the operator.
+  - Zyxel USG/ATP firewall integration is **Production Qualified on USG FLEX 200** (see [`ZyxelDriver.md`](ZyxelDriver.md) for full architecture and command catalog). Router commands stay off unless `router_live_enabled` is set. A failed router command stops. Netmon does not journal it, replay it, or save it to flash.
   - Supports 12-factor environment variable configuration injection (`NETMON_ROUTER_USER`, `NETMON_ROUTER_KEY_PATH`, `NETMON_ROUTER_DRY_RUN`, `NETMON_SNMP_*`, `NETMON_DB_*`, `NETMON_WEB_*`).
 - **Interactive Diagnostic Shell**:
   - Embedded interactive terminal CLI with real-time status, device, and traffic reports.
@@ -357,7 +356,6 @@ allow_ai_block_ip = false;
 allow_ai_raw_exec = false;
 
 router_live_enabled = false;
-router_flash_write = false;
 router_dry_run = false;
 
 web = {

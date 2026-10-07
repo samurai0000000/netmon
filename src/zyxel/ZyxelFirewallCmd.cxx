@@ -33,48 +33,20 @@ std::string ZyxelFirewallCmd::cmdShowSecurePolicy6(const std::string &nameOrNum)
 }
 
 std::vector<std::string> ZyxelFirewallCmd::cmdInsertRule(int position, const ZyxelFirewallRule &rule) {
-    std::vector<std::string> cmds;
-    cmds.push_back("secure-policy insert " + std::to_string(position));
-    if (!rule.name.empty()) {
-        cmds.push_back("name " + rule.name);
-    }
-    if (!rule.description.empty()) {
-        cmds.push_back("description " + rule.description);
-    }
-    if (!rule.fromZone.empty()) {
-        cmds.push_back("from " + rule.fromZone);
-    }
-    if (!rule.toZone.empty()) {
-        cmds.push_back("to " + rule.toZone);
-    }
-    if (!rule.sourceIp.empty()) {
-        cmds.push_back("sourceip " + rule.sourceIp);
-    }
-    if (!rule.destinationIp.empty()) {
-        cmds.push_back("destinationip " + rule.destinationIp);
-    }
-    if (!rule.service.empty()) {
-        cmds.push_back("service " + rule.service);
-    }
-    cmds.push_back("action " + (rule.action.empty() ? "allow" : rule.action));
-    cmds.push_back(rule.active ? "activate" : "deactivate");
-    cmds.push_back("exit");
-    return cmds;
+    (void)position;
+    (void)rule;
+    return {};
 }
 
 std::vector<std::string> ZyxelFirewallCmd::cmdInsertFastDeny(int position,
                                                             const std::string &ruleName,
                                                             const std::string &srcObjName,
                                                             const std::string &reason) {
-    std::vector<std::string> cmds;
-    cmds.push_back("secure-policy insert " + std::to_string(position));
-    cmds.push_back("name " + ruleName);
-    cmds.push_back("description " + (reason.empty() ? ruleName : reason));
-    cmds.push_back("action deny");
-    cmds.push_back("sourceip " + srcObjName);
-    cmds.push_back("activate");
-    cmds.push_back("exit");
-    return cmds;
+    (void)position;
+    (void)ruleName;
+    (void)srcObjName;
+    (void)reason;
+    return {};
 }
 
 std::string ZyxelFirewallCmd::cmdDeleteRule(const std::string &nameOrNum) {
@@ -87,47 +59,17 @@ std::string ZyxelFirewallCmd::cmdDeleteRule(const std::string &nameOrNum) {
 }
 
 std::vector<std::string> ZyxelFirewallCmd::cmdAppendRule(const ZyxelFirewallRule &rule) {
-    std::vector<std::string> cmds;
-    cmds.push_back("secure-policy append");
-    if (!rule.name.empty()) {
-        cmds.push_back("name " + rule.name);
-    }
-    if (!rule.description.empty()) {
-        cmds.push_back("description " + rule.description);
-    }
-    if (!rule.fromZone.empty()) {
-        cmds.push_back("from " + rule.fromZone);
-    }
-    if (!rule.toZone.empty()) {
-        cmds.push_back("to " + rule.toZone);
-    }
-    if (!rule.sourceIp.empty()) {
-        cmds.push_back("sourceip " + rule.sourceIp);
-    }
-    if (!rule.destinationIp.empty()) {
-        cmds.push_back("destinationip " + rule.destinationIp);
-    }
-    if (!rule.service.empty()) {
-        cmds.push_back("service " + rule.service);
-    }
-    cmds.push_back("action " + (rule.action.empty() ? "allow" : rule.action));
-    cmds.push_back(rule.active ? "activate" : "deactivate");
-    cmds.push_back("exit");
-    return cmds;
+    (void)rule;
+    return {};
 }
 
 std::vector<std::string> ZyxelFirewallCmd::cmdAppendFastDeny(const std::string &ruleName,
                                                             const std::string &srcObjName,
                                                             const std::string &reason) {
-    std::vector<std::string> cmds;
-    cmds.push_back("secure-policy append");
-    cmds.push_back("name " + ruleName);
-    cmds.push_back("description " + (reason.empty() ? ruleName : reason));
-    cmds.push_back("action deny");
-    cmds.push_back("sourceip " + srcObjName);
-    cmds.push_back("activate");
-    cmds.push_back("exit");
-    return cmds;
+    (void)ruleName;
+    (void)srcObjName;
+    (void)reason;
+    return {};
 }
 
 std::string ZyxelFirewallCmd::cmdDeleteRuleByName(const std::string &name) {

@@ -749,7 +749,8 @@ std::string AiSecurityClearanceManager::executeDo(std::unique_lock<std::recursiv
             _activeLevel2ConnId = 0;
         }
         if (!conn.currentSubmode.empty()) {
-            ZyxelDriver::getInstance().unwindToRootPrompt();
+            logGrantRevoke(conn.connectionId, "LEVEL2", "grant expired");
+            ZyxelDriver::getInstance().abandonPolicySubmode();
             conn.currentSubmode.clear();
         }
     }
@@ -871,13 +872,22 @@ std::string AiSecurityClearanceManager::executeDo(std::unique_lock<std::recursiv
     audit.outputSummary = wRes.output.substr(0, 100);
 
     // Update session owner state (Section 3.1)
-    if (cmdLine.rfind("secure-policy insert", 0) == 0 && wRes.sshResult == static_cast<int>(SshResult::SUCCESS)) {
+    if ((cmdLine.rfind("secure-policy insert", 0) == 0 ||
+         cmdLine.rfind("secure-policy append", 0) == 0) &&
+        wRes.sshResult == static_cast<int>(SshResult::SUCCESS)) {
         _sessionOwnerConnId = connId;
     }
-    if (AiSecurityClassifier::isRootPrompt(wRes.matchedPrompt)) {
+    if (it != _connections.end() &&
+        AiSecurityClassifier::isSecurePolicySubmode(wRes.matchedPrompt)) {
+        it->second.currentSubmode = wRes.matchedPrompt;
+        _sessionOwnerConnId = connId;
+    }
+    if (it != _connections.end() &&
+        AiSecurityClassifier::isRootPrompt(wRes.matchedPrompt)) {
         if (_sessionOwnerConnId == connId) {
             _sessionOwnerConnId = 0;
         }
+        it->second.currentSubmode.clear();
     }
 
     std::string codeStr = "OK";
@@ -920,9 +930,10 @@ void AiSecurityClearanceManager::handleSocketClosed(uint64_t connId) {
             _routerBusyConnId = 0;
             ZyxelDriver::getInstance().cancelActiveCommand();
         }
-        if (_sessionOwnerConnId == connId) {
+        if (_sessionOwnerConnId == connId || !it->second.currentSubmode.empty()) {
             _sessionOwnerConnId = 0;
-            ZyxelDriver::getInstance().unwindToRootPrompt();
+            logGrantRevoke(connId, "LEVEL2", "socket closed");
+            ZyxelDriver::getInstance().abandonPolicySubmode();
         }
 
         _connections.erase(it);
@@ -1087,8 +1098,29 @@ uint64_t AiSecurityClearanceManager::getSessionOwner() const {
 
 void AiSecurityClearanceManager::clearSessionOwner() {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
+    uint64_t connId = _sessionOwnerConnId;
     _sessionOwnerConnId = 0;
-    ZyxelDriver::getInstance().unwindToRootPrompt();
+    logGrantRevoke(connId, "LEVEL2", "owner cleared");
+    ZyxelDriver::getInstance().abandonPolicySubmode();
+}
+
+void AiSecurityClearanceManager::logGrantRevoke(uint64_t connId,
+                                               const std::string &grantType,
+                                               const std::string &reason) {
+    ClearanceAuditEntry audit;
+    audit.timestamp = time(nullptr);
+    audit.connectionId = connId;
+    audit.command = grantType;
+    audit.matchedMethod = grantType;
+    audit.decision = "REVOKED";
+    audit.reason = reason;
+    audit.outputSummary = ZyxelDriver::getInstance().getLastMatchedPrompt();
+    auto it = _connections.find(connId);
+    if (it != _connections.end()) {
+        audit.peerAddress = it->second.peerAddress;
+        audit.peerPort = it->second.peerPort;
+    }
+    logAudit(audit);
 }
 
 void AiSecurityClearanceManager::logAudit(const ClearanceAuditEntry &entry) {

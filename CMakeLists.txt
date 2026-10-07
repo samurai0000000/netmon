@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(netmon VERSION 1.0.8 LANGUAGES CXX C)
+project(netmon VERSION 1.0.9 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -251,6 +251,10 @@ set(ZYXEL_TEST_SOURCES
     test/TestZyxelMain.cxx
     test/TestZyxelScanner.cxx
     test/TestZyxelSshClient.cxx
+    test/TestClearanceSubmode.cxx
+    test/TestForwardBlock.cxx
+    test/TestDiagBracket.cxx
+    test/ZyshSimulator.cxx
     test/TestZyxelDriver.cxx
     test/TestZyxelSystemCmd.cxx
     test/TestZyxelNetworkCmd.cxx
@@ -342,6 +346,7 @@ add_executable(test_zyxel_parsers_fuzz
     src/zyxel/ZyxelAuthCmd.cxx
     src/zyxel/ZyxelWlanCmd.cxx
     src/ZyxelSshClient.cxx
+    src/AiSecurityClassifier.cxx
     src/Config.cxx
 )
 

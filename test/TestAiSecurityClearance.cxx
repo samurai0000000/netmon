@@ -197,7 +197,6 @@ TEST(AiSecurityClassifierTest, Level2RootShapesNominal) {
         "no service-object HTTP_TCP",
         "secure-policy insert 1",
         "no secure-policy 5",
-        "no secure-policy BLOCK_RULE",
         "no secure-policy name BLOCK_RULE",
         "ip virtual-server VS_1 interface ge1 original-ip 1.2.3.4 map-to 192.168.1.50 map-type port original-service HTTP mapped-service HTTP_LOCAL activate",
         "ip virtual-server VS_2 map-type port original-service HTTP mapped-service HTTP_LOCAL deactivate"
@@ -210,6 +209,38 @@ TEST(AiSecurityClassifierTest, Level2RootShapesNominal) {
         CHECK_EQUAL(static_cast<int>(LineClassification::LEVEL2_ROOT), static_cast<int>(cls));
         CHECK_FALSE(method.empty());
     }
+}
+
+TEST(AiSecurityClassifierTest, DiagnosticCleanupNeedsWriteClearance) {
+    const char *cleanup[] = {
+        "no wlan-security-profile NETMON_QA_SEC_E10",
+        "no wlan-ssid-profile NETMON_QA_SSID_E10",
+        "no groupname NETMON_QA_GRP_E9",
+        "no sslvpn application NETMON_QA_SSLVPN_E8",
+        "no isakmp policy NETMON_QA_IKE_E8",
+        "no anti-virus NETMON_QA_AV_E7",
+        "no ssl-inspection profile NETMON_QA_SSL_E7",
+        "no ip ddns profile NETMON_QA_DDNS",
+        "no object-group address6 NETMON_QA_GRP6",
+        "no aaa group server radius NETMON_QA_AAA_E9"
+    };
+
+    for (const char *command : cleanup) {
+        int timeoutMs = 0;
+        std::string method;
+        CHECK_EQUAL(
+            static_cast<int>(LineClassification::LEVEL2_ROOT),
+            static_cast<int>(AiSecurityClassifier::classify(
+                command, "Router#", timeoutMs, method)));
+        STRCMP_EQUAL("cmdDeleteNamedObject", method.c_str());
+    }
+
+    int timeoutMs = 0;
+    std::string method;
+    CHECK_EQUAL(
+        static_cast<int>(LineClassification::UNCLASSIFIED),
+        static_cast<int>(AiSecurityClassifier::classify(
+            "no sslvpn application bad-name", "Router#", timeoutMs, method)));
 }
 
 TEST(AiSecurityClassifierTest, Level2RootShapesIllegalArgs) {
@@ -239,12 +270,15 @@ TEST(AiSecurityClassifierTest, Level2RootShapesIllegalArgs) {
                 static_cast<int>(AiSecurityClassifier::classify("secure-policy insert 0", "#", timeoutMs, method)));
     CHECK_EQUAL(static_cast<int>(LineClassification::UNCLASSIFIED),
                 static_cast<int>(AiSecurityClassifier::classify("secure-policy insert 10000", "#", timeoutMs, method)));
+
+    CHECK_EQUAL(static_cast<int>(LineClassification::UNCLASSIFIED),
+                static_cast<int>(AiSecurityClassifier::classify("no secure-policy BLOCK_RULE", "Router#", timeoutMs, method)));
 }
 
 TEST(AiSecurityClassifierTest, Level2SubmodeFragments) {
     int timeoutMs = 0;
     std::string method;
-    std::string submodePrompt = "Router(config-secure-policy)#";
+    std::string submodePrompt = "Router(secure-policy)#";
 
     std::vector<std::string> submodeCmds = {
         "description Allow HTTP inbound",
@@ -257,8 +291,7 @@ TEST(AiSecurityClassifierTest, Level2SubmodeFragments) {
         "action allow",
         "action deny",
         "activate",
-        "deactivate",
-        "exit"
+        "no activate"
     };
 
     // In submode prompt, all must be accepted as LEVEL2_SUBMODE
@@ -270,9 +303,26 @@ TEST(AiSecurityClassifierTest, Level2SubmodeFragments) {
 
     // At root prompt, submode fragments MUST be UNCLASSIFIED
     for (const auto &cmd : submodeCmds) {
-        LineClassification cls = AiSecurityClassifier::classify(cmd, "#", timeoutMs, method);
+        LineClassification cls = AiSecurityClassifier::classify(cmd, "Router#", timeoutMs, method);
         CHECK_EQUAL(static_cast<int>(LineClassification::UNCLASSIFIED), static_cast<int>(cls));
     }
+
+    CHECK_EQUAL(static_cast<int>(LineClassification::UNCLASSIFIED),
+                static_cast<int>(AiSecurityClassifier::classify("deactivate", submodePrompt, timeoutMs, method)));
+    CHECK_EQUAL(static_cast<int>(LineClassification::UNCLASSIFIED),
+                static_cast<int>(AiSecurityClassifier::classify("exit", submodePrompt, timeoutMs, method)));
+    CHECK_EQUAL(static_cast<int>(LineClassification::UNCLASSIFIED),
+                static_cast<int>(AiSecurityClassifier::classify("name RULE_HTTP", submodePrompt, timeoutMs, method, false)));
+    CHECK_EQUAL(static_cast<int>(LineClassification::LEVEL2_SUBMODE),
+                static_cast<int>(AiSecurityClassifier::classify("no activate", submodePrompt, timeoutMs, method, false)));
+
+    CHECK_TRUE(AiSecurityClassifier::isSecurePolicySubmode("Router(secure-policy)#"));
+    CHECK_FALSE(AiSecurityClassifier::isSecurePolicySubmode("Router(config-secure-policy)#"));
+    CHECK_TRUE(AiSecurityClassifier::isRootPrompt("Router#"));
+    CHECK_FALSE(AiSecurityClassifier::isRootPrompt("Router>"));
+    CHECK_FALSE(AiSecurityClassifier::isRootPrompt("Router(config)#"));
+    CHECK_FALSE(AiSecurityClassifier::isRootPrompt(""));
+    CHECK_FALSE(AiSecurityClassifier::isRootPrompt("#"));
 }
 
 TEST(AiSecurityClassifierTest, Level1DeviceManagementForbidden) {
@@ -298,7 +348,10 @@ TEST(AiSecurityClassifierTest, ChainingAndControlCharactersRejected) {
         "show version $(reboot)",
         "show version\nreboot",
         "show version\r\nwrite",
-        "show\tversion"
+        "show\tversion",
+        "?",
+        "show ?",
+        "router ospf ?"
     };
 
     for (const auto &cmd : badCmds) {
@@ -397,6 +450,29 @@ TEST(AiSecurityClearanceManagerTest, Level2ApprovedAndExecuted) {
     STRCMP_EQUAL("ip route 10.0.0.0 24 192.168.1.1 1", calls[0].command.c_str());
 }
 
+TEST(AiSecurityClearanceManagerTest, DiagnosticCleanupRequiresWriteGrant) {
+    auto &mgr = AiSecurityClearanceManager::getInstance();
+    uint64_t connId =
+        mgr.registerConnectionForTesting(103, "192.0.2.10", 55558);
+    const char *command = "no ip ddns profile NETMON_QA_DDNS";
+
+    mgr.setConnectionLevelForTesting(
+        connId, ClientClearanceState::LEVEL3, 0);
+    std::string readRsp =
+        mgr.handleClientMessage(connId, std::string("DO ") + command);
+    CHECK_TRUE(readRsp.rfind("RSP NOT_AUTHORIZED", 0) == 0);
+
+    mgr.setConnectionLevelForTesting(
+        connId, ClientClearanceState::LEVEL2, 300);
+    std::string writeRsp =
+        mgr.handleClientMessage(connId, std::string("DO ") + command);
+    CHECK_TRUE(writeRsp.rfind("RSP OK", 0) == 0);
+
+    auto calls = RecordingRouter::getInstance().getClearanceCalls();
+    LONGS_EQUAL(1, calls.size());
+    STRCMP_EQUAL(command, calls[0].command.c_str());
+}
+
 TEST(AiSecurityClearanceManagerTest, DeniedRequestRefusesAllCommands) {
     auto &mgr = AiSecurityClearanceManager::getInstance();
     uint64_t connId = mgr.registerConnectionForTesting(103, "192.0.2.10", 55558);
@@ -448,7 +524,7 @@ TEST(AiSecurityClearanceManagerTest, SessionOwnerLockingAndUnwind) {
 
     // Conn1 enters submode
     RecordingRouter::getInstance().setNextClearanceResponse(
-        SshResult::SUCCESS, "Submode entered", "Router(config-secure-policy)#");
+        SshResult::SUCCESS, "Submode entered", "Router(secure-policy)#");
 
     std::string rsp1 = mgr.handleClientMessage(conn1, "DO secure-policy insert 1");
     CHECK_TRUE(rsp1.rfind("RSP OK", 0) == 0);
@@ -460,14 +536,14 @@ TEST(AiSecurityClearanceManagerTest, SessionOwnerLockingAndUnwind) {
 
     // Conn1 executes submode fragment
     RecordingRouter::getInstance().setNextClearanceResponse(
-        SshResult::SUCCESS, "Action set", "Router(config-secure-policy)#");
+        SshResult::SUCCESS, "Action set", "Router(secure-policy)#");
     std::string rspSub = mgr.handleClientMessage(conn1, "DO action allow");
     CHECK_TRUE(rspSub.rfind("RSP OK", 0) == 0);
 
-    // Conn1 exits submode back to root prompt
+    // Conn1 returns to the root prompt
     RecordingRouter::getInstance().setNextClearanceResponse(
         SshResult::SUCCESS, "Exited", "Router#");
-    std::string rspExit = mgr.handleClientMessage(conn1, "DO exit");
+    std::string rspExit = mgr.handleClientMessage(conn1, "DO activate");
     CHECK_TRUE(rspExit.rfind("RSP OK", 0) == 0);
 
     // Session owner released
@@ -485,16 +561,16 @@ TEST(AiSecurityClearanceManagerTest, DisconnectUnwindsSubmode) {
 
     // Conn1 enters submode
     RecordingRouter::getInstance().setNextClearanceResponse(
-        SshResult::SUCCESS, "Submode entered", "Router(config-secure-policy)#");
+        SshResult::SUCCESS, "Submode entered", "Router(secure-policy)#");
     mgr.handleClientMessage(conn1, "DO secure-policy insert 1");
     LONGS_EQUAL(conn1, mgr.getSessionOwner());
 
     // Socket disconnects while in submode
     mgr.handleSocketClosed(conn1);
 
-    // Must unwind to root prompt and release session owner
+    // Release the owner without sending exit
     LONGS_EQUAL(0, mgr.getSessionOwner());
-    CHECK_TRUE(RecordingRouter::getInstance().getUnwindCalls() > 0);
+    LONGS_EQUAL(0, RecordingRouter::getInstance().getUnwindCalls());
 }
 
 TEST_GROUP(AiSecurityGatewayTest) {

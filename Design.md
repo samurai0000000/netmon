@@ -48,7 +48,7 @@ All daemon configurations standardize on `libconfig++` and adhere to the XDG Bas
 │  │   └───────────────┬────────────────┘  │   │ In-Memory Sliding Windows │  │
 │  │                   ▼                   │   │ - 60-Minute Circular Ring │  │
 │  │   ┌────────────────────────────────┐  │   │ - Top talkers & rates     │  │
-│  │   │ SnmpDatabase (SQLite WAL Mode) │  │   │ - Protocol distributions  │  │
+│  │   │ SnmpDatabase (SQLite)          │  │   │ - Protocol distributions  │  │
 │  │   │ - 90-Day Raw 30s Retention     │  │   │ - Host Behavioral Metrics │  │
 │  │   │ - Multi-Year Hourly Rollups    │  │   └─────────────┬─────────────┘  │
 │  │   └───────────────┬────────────────┘  │                 │                │
@@ -226,7 +226,6 @@ devices = (
 ### 3.5 Persistent SQLite Time-Series Database (`SnmpDatabase`)
 
 `SnmpDatabase` provides resilient, zero-loss local time-series storage:
-- **SQLite WAL Mode**: Configured with `PRAGMA journal_mode=WAL;` and `PRAGMA synchronous=NORMAL;` for minimal I/O overhead and lock-free concurrent reads while polling threads write.
 - **`snmp_samples` Table**: Records uncompressed 30-second telemetry data points (`timestamp`, `target_ip`, `if_name`, `in_bytes_sec`, `out_bytes_sec`, `in_hc_octets`, `out_hc_octets`, `oper_status`, `in_errors`, `out_errors`). Indexed on `(target_ip, if_name, timestamp)`.
 - **90-Day Raw Retention**: Retains full uncompressed granularity for 90 days (`~50 MB` total database footprint) for forensic spike and outage analysis.
 - **`snmp_hourly_rollups` Table**: Automatically rolls up older samples into hourly min/avg/max/total throughput statistics, enabling multi-year capacity planning and 95th-percentile billing analysis with `< 1 MB` storage per year.
@@ -268,9 +267,9 @@ The `SecurityCheckpoint` enforces hard safety boundaries on all AI agent invocat
   - **Automated Qualification**: Comprehensive test suite (`test_zyxel_driver_suite`) running CppUTest fixtures across 14 data models, manual transcripts from the official 666-page ZyWALL ZLD Reference Guide, and deep Clang 18 `libFuzzer` campaigns (>450,000 fuzzed iterations with ASan/UBSan).
   - **Authoritative Specification**: See [`ZyxelDriver.md`](ZyxelDriver.md) for full architectural documentation, security controls, capabilities catalog, and ASCII dataflow diagrams.
 - **Default Configuration Safeguards**:
-  - `router_live_enabled = false` (default in `netmon.cfg`): Safe default; mutations are journaled locally as pending unless explicitly enabled by operator.
-  - `router_flash_write = false` (default in `netmon.cfg`): Quiescent flash commits (`write`) disabled unless enabled.
+  - `router_live_enabled = false` (default in `netmon.cfg`): Router commands stay off unless the operator enables them.
   - `router_dry_run = true` (configurable via `netmon.cfg` or `NETMON_ROUTER_DRY_RUN`): Emits synthetic `[router-dry-run]` command logs to stderr and records transcripts for verification without network access.
+  - A failed router command stops. Netmon does not journal it, replay it, or save the router configuration.
 - **Encrypted Vault Storage Only**:
   - Router credentials are stored exclusively in `AuthManager`'s AES-256-GCM encrypted vault (`~/.config/netmon/vault.enc`) with companion master key `~/.config/netmon/vault.key` (`0600` permissions).
   - Plaintext password config fields and `NETMON_ROUTER_PASSWORD` environment overrides are not supported and are excluded from the design.
@@ -281,13 +280,6 @@ The `SecurityCheckpoint` enforces hard safety boundaries on all AI agent invocat
   - Tail-anchored prompt detection matching user exec (`Router>`), privileged exec (`Router#`), config (`Router(config)#`), and submode contexts (`Router(secure-policy)#`).
   - ANSI escape code stripping and command echo removal.
   - Automatic 5x `exit` unwind recovery to restore root prompt `#` on unexpected submode traps.
-- **Durable On-Disk Mutation Journaling (`router_journal.json`)**:
-  - Every block and unblock mutation is journaled atomically to `~/.config/netmon/router_journal.json` (`0600` permissions) before dispatch.
-  - Replay and reconciliation logic tracks row states (`pending` vs `applied_running`).
-- **30-Second Debounced Flash Protection**:
-  - Rapid block/unblock cycles are debounced across a 30-second window before committing to router NVRAM (`write`).
-- **Reference-Ordered Rollback Engine**:
-  - Clean transactional teardown in exact reverse reference order (`no secure-policy` before `no address-object`) if command sequence fails midway.
 - **Trust On First Use (TOFU) Host-Key Pinning**:
   - Router SSH server public key SHA-256 fingerprint pinned to `~/.config/netmon/router_hostkey.pin` (`0600` permissions), protecting against man-in-the-middle attacks.
 
