@@ -72,6 +72,42 @@ TEST(AiSecurityClassifierTest, Level3ShapesNominal) {
     }
 }
 
+TEST(AiSecurityClassifierTest, Level3TenEnvelopesExpanded) {
+    std::vector<std::string> expandedCmds = {
+        "show ip route",
+        "show interfaces status",
+        "show interfaces detail",
+        "show anti-spam statistics",
+        "show anti-spam profile",
+        "show anti-virus status",
+        "show content-filter status",
+        "show crypto ike sa",
+        "show crypto ipsec sa",
+        "show vpn-monitor",
+        "show ssl-vpn status",
+        "show user status",
+        "show user-group",
+        "show aaa-server",
+        "show logging status",
+        "show environment",
+        "show clock",
+        "show registration status",
+        "show running-config",
+        "show bwm status",
+        "show bridge status",
+        "show vlan status"
+    };
+
+    for (const auto &cmd : expandedCmds) {
+        int timeoutMs = 0;
+        std::string method;
+        LineClassification cls = AiSecurityClassifier::classify(cmd, "#", timeoutMs, method);
+        CHECK_EQUAL(static_cast<int>(LineClassification::LEVEL3), static_cast<int>(cls));
+        CHECK_FALSE(method.empty());
+        CHECK_TRUE(timeoutMs > 0);
+    }
+}
+
 TEST(AiSecurityClassifierTest, Level3Timeouts) {
     int timeoutMs = 0;
     std::string method;

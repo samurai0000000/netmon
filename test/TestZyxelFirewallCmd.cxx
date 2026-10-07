@@ -137,6 +137,95 @@ TEST(ZyxelFirewallCmdTest, ParseErrorsOnCorruptedBuffers) {
     std::vector<ZyxelFirewallRule> rules;
     CHECK_FALSE(ZyxelFirewallCmd::parseSecurePolicy("Random garbage % syntax error", rules));
     CHECK_FALSE(ZyxelFirewallCmd::parseSecurePolicy("No policy configured", rules));
+
+    ZyxelSecurePolicyStatus status;
+    CHECK_FALSE(ZyxelFirewallCmd::parseSecurePolicyStatus("Random garbage", status));
+}
+
+TEST(ZyxelFirewallCmdTest, Envelope6CommandGenerators) {
+    STRCMP_EQUAL("show secure-policy status", ZyxelFirewallCmd::cmdShowSecurePolicyStatus().c_str());
+    STRCMP_EQUAL("show secure-policy block_rules", ZyxelFirewallCmd::cmdShowSecurePolicyBlockRules().c_str());
+    STRCMP_EQUAL("show secure-policy6", ZyxelFirewallCmd::cmdShowSecurePolicy6().c_str());
+    STRCMP_EQUAL("show secure-policy6 5", ZyxelFirewallCmd::cmdShowSecurePolicy6("5").c_str());
+
+    ZyxelFirewallRule rule;
+    rule.name = "AppendRule";
+    rule.description = "Test append";
+    rule.fromZone = "LAN";
+    rule.toZone = "WAN";
+    rule.sourceIp = "HostX";
+    rule.destinationIp = "HostY";
+    rule.service = "HTTPS";
+    rule.action = "deny";
+    rule.active = false;
+
+    auto appendSeq = ZyxelFirewallCmd::cmdAppendRule(rule);
+    LONGS_EQUAL(11, appendSeq.size());
+    STRCMP_EQUAL("secure-policy append", appendSeq[0].c_str());
+    STRCMP_EQUAL("name AppendRule", appendSeq[1].c_str());
+    STRCMP_EQUAL("description Test append", appendSeq[2].c_str());
+    STRCMP_EQUAL("from LAN", appendSeq[3].c_str());
+    STRCMP_EQUAL("to WAN", appendSeq[4].c_str());
+    STRCMP_EQUAL("sourceip HostX", appendSeq[5].c_str());
+    STRCMP_EQUAL("destinationip HostY", appendSeq[6].c_str());
+    STRCMP_EQUAL("service HTTPS", appendSeq[7].c_str());
+    STRCMP_EQUAL("action deny", appendSeq[8].c_str());
+    STRCMP_EQUAL("deactivate", appendSeq[9].c_str());
+    STRCMP_EQUAL("exit", appendSeq[10].c_str());
+
+    auto appendFastDeny = ZyxelFirewallCmd::cmdAppendFastDeny("NETMON_QA_RULE", "NETMON_QA_HOST", "Fast block");
+    LONGS_EQUAL(7, appendFastDeny.size());
+    STRCMP_EQUAL("secure-policy append", appendFastDeny[0].c_str());
+    STRCMP_EQUAL("name NETMON_QA_RULE", appendFastDeny[1].c_str());
+    STRCMP_EQUAL("description Fast block", appendFastDeny[2].c_str());
+    STRCMP_EQUAL("action deny", appendFastDeny[3].c_str());
+    STRCMP_EQUAL("sourceip NETMON_QA_HOST", appendFastDeny[4].c_str());
+    STRCMP_EQUAL("activate", appendFastDeny[5].c_str());
+    STRCMP_EQUAL("exit", appendFastDeny[6].c_str());
+
+    STRCMP_EQUAL("no secure-policy name NETMON_QA_RULE",
+                 ZyxelFirewallCmd::cmdDeleteRuleByName("NETMON_QA_RULE").c_str());
+    STRCMP_EQUAL("no secure-policy 5", ZyxelFirewallCmd::cmdDeleteRuleByNumber(5).c_str());
+
+    STRCMP_EQUAL("secure-policy 1 activate", ZyxelFirewallCmd::cmdActivateRule("1", true).c_str());
+    STRCMP_EQUAL("no secure-policy name NETMON_QA_RULE activate",
+                 ZyxelFirewallCmd::cmdActivateRule("NETMON_QA_RULE", false).c_str());
+
+    STRCMP_EQUAL("secure-policy activate", ZyxelFirewallCmd::cmdActivateSecurePolicy(true).c_str());
+    STRCMP_EQUAL("no secure-policy activate", ZyxelFirewallCmd::cmdActivateSecurePolicy(false).c_str());
+    STRCMP_EQUAL("secure-policy6 activate", ZyxelFirewallCmd::cmdActivateSecurePolicy6(true).c_str());
+    STRCMP_EQUAL("no secure-policy6 activate", ZyxelFirewallCmd::cmdActivateSecurePolicy6(false).c_str());
+    STRCMP_EQUAL("secure-policy asymmetrical-route activate",
+                 ZyxelFirewallCmd::cmdSetAsymmetricalRoute(true).c_str());
+    STRCMP_EQUAL("no secure-policy asymmetrical-route activate",
+                 ZyxelFirewallCmd::cmdSetAsymmetricalRoute(false).c_str());
+
+    STRCMP_EQUAL("show device-ha", ZyxelFirewallCmd::cmdShowDeviceHa().c_str());
+    STRCMP_EQUAL("show device-ha status", ZyxelFirewallCmd::cmdShowDeviceHaStatus().c_str());
+    STRCMP_EQUAL("show device-ha mode", ZyxelFirewallCmd::cmdShowDeviceHaMode().c_str());
+    STRCMP_EQUAL("show device-ha2", ZyxelFirewallCmd::cmdShowDeviceHa2().c_str());
+    STRCMP_EQUAL("show device-ha2 interfaces", ZyxelFirewallCmd::cmdShowDeviceHa2Interfaces().c_str());
+    STRCMP_EQUAL("show device-ha2 device-status", ZyxelFirewallCmd::cmdShowDeviceHa2DeviceStatus().c_str());
+
+    STRCMP_EQUAL("show secure-policy 999", ZyxelFirewallCmd::cmdInvalidSecurePolicyDryFire().c_str());
+    STRCMP_EQUAL("show secure-policy6 999", ZyxelFirewallCmd::cmdInvalidSecurePolicy6DryFire().c_str());
+    STRCMP_EQUAL("show device-ha invalid_probe_999", ZyxelFirewallCmd::cmdInvalidDeviceHaDryFire().c_str());
+    STRCMP_EQUAL("show device-ha2 invalid_probe_999", ZyxelFirewallCmd::cmdInvalidDeviceHa2DryFire().c_str());
+}
+
+TEST(ZyxelFirewallCmdTest, ParseSecurePolicyStatusTranscript) {
+    std::string raw =
+        "secure-policy status: yes\n"
+        "secure-policy asymmetrical route status: no\n"
+        "secure-policy default rule: deny, no log\n"
+        "secure-policy tcp flag detect: yes\n";
+
+    ZyxelSecurePolicyStatus status;
+    CHECK_TRUE(ZyxelFirewallCmd::parseSecurePolicyStatus(raw, status));
+    CHECK_TRUE(status.active);
+    CHECK_FALSE(status.asymmetricalRoute);
+    STRCMP_EQUAL("deny, no log", status.defaultRule.c_str());
+    CHECK_TRUE(status.tcpFlagDetect);
 }
 
 /*

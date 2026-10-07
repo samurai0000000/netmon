@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(netmon VERSION 1.0.7 LANGUAGES CXX C)
+project(netmon VERSION 1.0.8 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -92,6 +92,9 @@ set(SOURCES
     src/zyxel/ZyxelFirewallCmd.cxx
     src/zyxel/ZyxelNatCmd.cxx
     src/zyxel/ZyxelSecurityCmd.cxx
+    src/zyxel/ZyxelVpnCmd.cxx
+    src/zyxel/ZyxelAuthCmd.cxx
+    src/zyxel/ZyxelWlanCmd.cxx
     src/ZyxelLiveDiagnostic.cxx
 )
 
@@ -255,6 +258,9 @@ set(ZYXEL_TEST_SOURCES
     test/TestZyxelFirewallCmd.cxx
     test/TestZyxelNatCmd.cxx
     test/TestZyxelSecurityCmd.cxx
+    test/TestZyxelVpnCmd.cxx
+    test/TestZyxelAuthCmd.cxx
+    test/TestZyxelWlanCmd.cxx
     src/ZyxelDriver.cxx
     src/ZyxelSshClient.cxx
     src/zyxel/ZyxelScanner.cxx
@@ -264,6 +270,9 @@ set(ZYXEL_TEST_SOURCES
     src/zyxel/ZyxelFirewallCmd.cxx
     src/zyxel/ZyxelNatCmd.cxx
     src/zyxel/ZyxelSecurityCmd.cxx
+    src/zyxel/ZyxelVpnCmd.cxx
+    src/zyxel/ZyxelAuthCmd.cxx
+    src/zyxel/ZyxelWlanCmd.cxx
     src/AiSecurityClassifier.cxx
     src/AuthManager.cxx
     src/Config.cxx
@@ -329,6 +338,9 @@ add_executable(test_zyxel_parsers_fuzz
     src/zyxel/ZyxelFirewallCmd.cxx
     src/zyxel/ZyxelNatCmd.cxx
     src/zyxel/ZyxelSecurityCmd.cxx
+    src/zyxel/ZyxelVpnCmd.cxx
+    src/zyxel/ZyxelAuthCmd.cxx
+    src/zyxel/ZyxelWlanCmd.cxx
     src/ZyxelSshClient.cxx
     src/Config.cxx
 )

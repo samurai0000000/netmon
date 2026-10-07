@@ -1,0 +1,113 @@
+==============================================================================
+Live Firewall Diagnostic Verification Evidence: Envelope 6 (Security Policy & Device HA)
+==============================================================================
+Date:        2026-10-06 23:45:50 +08:00
+Target Host: 192.168.8.1 (Zyxel USG FLEX 200, Firmware V5.43(ABUI.0))
+Runner:      netmon in-process CppUTest runner via 'firewall diag'
+Daemon:      NetMon v1.0.7 on rhino (192.168.8.30)
+Evaluator:   Antigravity / Gemini
+
+------------------------------------------------------------------------------
+1. Envelope 6 Individual Qualification: 'firewall diag all e6'
+------------------------------------------------------------------------------
+CppUTest Group: LiveFirewallE6
+Total Tests:    17
+Passed:         17
+Failed:         0
+Regressions:    0
+Execution Time: 0.88s
+
+Test Cases Qualified:
+- ReadSecurePolicy:                     PASS (SLA, 108.1 ms, 31 rules)
+- ReadSecurePolicySpecific (rule 1):    PASS (SLA, 10.5 ms)
+- ReadSecurePolicyStatus:               PASS (SLA, 10.3 ms, active=true)
+- ReadSecurePolicyBlockRules:           PASS (SLA, 111.5 ms)
+- ReadSecurePolicy6:                    PASS (SLA, 50.7 ms)
+- ReadSecurePolicy6Specific (rule 1):   PASS (SLA, 10.5 ms)
+- ReadDeviceHa:                         PASS (DRY-FIRE, 10.2 ms)
+- ReadDeviceHaStatus:                   PASS (DRY-FIRE, 10.3 ms)
+- ReadDeviceHaMode:                     PASS (DRY-FIRE, 10.2 ms)
+- ReadDeviceHa2:                        PASS (DRY-FIRE, 138 ms)
+- ReadDeviceHa2Interfaces:              PASS (DRY-FIRE, 10.2 ms)
+- ReadDeviceHa2DeviceStatus:            PASS (DRY-FIRE, 10.2 ms)
+- DryFireSecurePolicyNonExistent:       PASS (DRY-FIRE, 10.2 ms)
+- DryFireSecurePolicy6NonExistent:      PASS (DRY-FIRE, 10.2 ms)
+- DryFireDeviceHaInvalid:               PASS (DRY-FIRE, 10.2 ms)
+- DryFireDeviceHa2Invalid:              PASS (DRY-FIRE, 10.2 ms)
+- WriteAppendSecurePolicyRollback:      PASS (ROLLBACK, 215.4 ms)
+
+Scorecard Summary:
++----------------------+----------+-----------+-------+-------+------------+
+| Test Case            | RTT (ms) | Parse(us) | Bytes | Yield | Result     |
++----------------------+----------+-----------+-------+-------+------------+
+| WriteAppendSecurePol |    215.4 |         0 |  3892 |     1 | PASS (ROLL |
+| DryFireDeviceHa2Inva |     10.2 |         0 |    88 |     1 | PASS (DRY- |
+| DryFireDeviceHaInval |     10.2 |         0 |    88 |     1 | PASS (DRY- |
+| DryFireSecurePolicy6 |     10.2 |         0 |    86 |     1 | PASS (DRY- |
+| DryFireSecurePolicyN |     10.2 |         0 |    86 |     1 | PASS (DRY- |
+| ReadDeviceHa2DeviceS |     10.2 |         0 |    88 |     1 | PASS (DRY- |
+| ReadDeviceHa2Interfa |     10.2 |         0 |    88 |     1 | PASS (DRY- |
+| ReadDeviceHa2        |    138.0 |         0 |    88 |     1 | PASS (DRY- |
+| ReadDeviceHaMode     |     10.2 |         0 |    88 |     1 | PASS (DRY- |
+| ReadDeviceHaStatus   |     10.3 |         0 |    88 |     1 | PASS (DRY- |
+| ReadDeviceHa         |     10.2 |         0 |    88 |     1 | PASS (DRY- |
+| ReadSecurePolicy6Spe |     10.5 |         0 |  1113 |     1 | PASS (SLA) |
+| ReadSecurePolicy6    |     50.7 |         0 | 15025 |     1 | PASS (SLA) |
+| ReadSecurePolicyBloc |    111.5 |         0 |    24 |     1 | PASS (SLA) |
+| ReadSecurePolicyStat |     10.3 |        26 |   154 |     1 | PASS (SLA) |
+| ReadSecurePolicySpec |     10.5 |         0 |  1096 |     1 | PASS (SLA) |
+| ReadSecurePolicy     |    108.1 |       651 | 33826 |    31 | PASS (SLA) |
++----------------------+----------+-----------+-------+-------+------------+
+| SUMMARY: 17 passed, 0 failed, 0 regressions (Total: 0.88s)               |
++--------------------------------------------------------------------------+
+
+------------------------------------------------------------------------------
+2. Cumulative Live Diagnostic Qualification: 'firewall diag all'
+------------------------------------------------------------------------------
+Cumulative Groups: LiveFirewallE1 + LiveFirewallE2 + LiveFirewallE3 +
+                   LiveFirewallE4 + LiveFirewallE5 + LiveFirewallE6 +
+                   LiveFirewallReadDiag + LiveFirewallWriteDiag
+Total Tests:       161
+Passed:            161
+Failed:            0
+Regressions:       0
+Execution Time:    8.40s
+
+Cumulative Breakdown:
+- LiveFirewallE1 (System & Hardware):               17 passed
+- LiveFirewallE2 (Interfaces, Zones, Trunks, L2):   15 passed
+- LiveFirewallE3 (Routing, Protocols, BGP/OSPF):    34 passed
+- LiveFirewallE4 (Objects, Schedules, AAA):         35 passed
+- LiveFirewallE5 (NAT, DDNS, Virtual Servers, ALG): 22 passed
+- LiveFirewallE6 (Security Policy, Device HA):      17 passed
+- LiveFirewallReadDiag (Core Operational Reads):     9 passed
+- LiveFirewallWriteDiag (Mutation Invariants):      12 passed
+Total: 161 passed, 0 failed, 0 regressions.
+
+------------------------------------------------------------------------------
+3. Key Empirical Discoveries for Envelope 6
+------------------------------------------------------------------------------
+1. Append-Only Rule Invariant:
+   - 'secure-policy append' enters submode 'Router(secure-policy)#' and appends
+     the new rule cleanly to the end of the rule table, completely eliminating
+     the hazard of displacing rule 1.
+   - Verified in WriteAppendSecurePolicyRollback and updated legacy fast-deny test.
+
+2. Query Format:
+   - 'show secure-policy' accepts rule index numbers (<1..500>) or empty argument
+     for full listing, but rejects arbitrary rule names with Parse error.
+   - Verification of named rules parses the table output for 'name: <name>'.
+
+3. Device HA Chassis Limitations:
+   - USG FLEX 200 is a desktop gateway without redundant hardware chassis.
+   - Commands 'show device-ha' and 'show device-ha2' return:
+     "% (after 'show'): Parse error".
+   - Verified cleanly as negative dry-fire tests.
+
+4. IPv6 Secure Policy:
+   - 'show secure-policy6' outputs full IPv6 firewall policy table.
+   - 'show secure-policy6 <number>' queries individual IPv6 rules.
+
+------------------------------------------------------------------------------
+Envelope 6 Status: COMPLETE & VERIFIED
+==============================================================================

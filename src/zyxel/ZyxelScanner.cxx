@@ -69,7 +69,8 @@ int findDividerLine(const std::vector<std::string> &lines) {
         "ip", "address", "netmask", "mask", "mac", "mtu", "slot",
         "model", "firmware", "version", "service", "action", "source",
         "destination", "type", "port", "zone", "metric", "gateway",
-        "route", "prefix", "hops"
+        "route", "prefix", "hops", "disk", "usage", "size", "member",
+        "description", "binding"
     };
 
     for (size_t i = 1; i < lines.size(); ++i) {
@@ -92,19 +93,25 @@ int findDividerLine(const std::vector<std::string> &lines) {
                 }
             }
 
-            // For continuous divider line, header line must contain at least one gap (2+ spaces)
-            const std::string &prev = lines[i - 1];
-            if (prev.find("  ") == std::string::npos) {
-                continue;
-            }
-
-            // Verify preceding line contains recognizable table keywords
-            std::string lowerPrev = prev;
-            std::transform(lowerPrev.begin(), lowerPrev.end(), lowerPrev.begin(), ::tolower);
-            for (const char *kw : headerKeywords) {
-                if (lowerPrev.find(kw) != std::string::npos) {
-                    return static_cast<int>(i);
+            // For continuous divider line, check preceding 1-2 lines for header keywords & column gaps
+            // (handles multi-line wrapped headers such as 'Ref' or 'Description' immediately above divider)
+            bool foundHeader = false;
+            for (int back = 1; back <= 2 && (static_cast<int>(i) - back >= 0); ++back) {
+                const std::string &prevLine = lines[i - back];
+                if (prevLine.find("  ") != std::string::npos) {
+                    std::string lower = prevLine;
+                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                    for (const char *kw : headerKeywords) {
+                        if (lower.find(kw) != std::string::npos) {
+                            foundHeader = true;
+                            break;
+                        }
+                    }
                 }
+                if (foundHeader) break;
+            }
+            if (foundHeader) {
+                return static_cast<int>(i);
             }
         }
     }

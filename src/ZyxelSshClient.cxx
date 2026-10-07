@@ -383,8 +383,8 @@ bool ZyxelSshClient::matchPrompt(const std::string &buffer, std::string &matched
     }
 
     // Match prompt strictly at trailing end of buffer
-    // Handles: Router#, Router>, Router(config)#, Router(config-policy-control)#, usg-flex-200#
-    static const std::regex promptRegex(R"((?:[\r\n]|^)[\w.-]+(?:\([A-Za-z0-9_.-]+\))?[>#]\s*$)");
+    // Handles: Router#, Router>, Router(config)#, Router(config-policy-control)#, Router(config-bwm append 2)#, usg-flex-200#
+    static const std::regex promptRegex(R"((?:[\r\n]|^)[\w.-]+(?:\([^()\r\n]+\))?[>#]\s*$)");
     std::smatch match;
     if (std::regex_search(cleaned, match, promptRegex)) {
         matchedPrompt = match.str();
@@ -424,8 +424,8 @@ std::string ZyxelSshClient::stripTrailingPrompt(const std::string &buffer) {
     }
 
     // Match prompt strictly at trailing end of buffer
-    // Handles: Router#, Router>, Router(config)#, Router(config-policy-control)#, usg-flex-200#
-    static const std::regex trailingPromptRegex(R"((?:[\r\n]|^)[\w.-]+(?:\([A-Za-z0-9_.-]+\))?[>#]\s*$)");
+    // Handles: Router#, Router>, Router(config)#, Router(config-policy-control)#, Router(config-bwm append 2)#, usg-flex-200#
+    static const std::regex trailingPromptRegex(R"((?:[\r\n]|^)[\w.-]+(?:\([^()\r\n]+\))?[>#]\s*$)");
     std::smatch match;
     if (std::regex_search(cleaned, match, trailingPromptRegex)) {
         cleaned = cleaned.substr(0, match.position());

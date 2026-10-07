@@ -1,0 +1,78 @@
+==============================================================================
+Live Firewall Diagnostic Verification Evidence: Envelope 16
+(Anchor Process Liveness Watchdog & Anti-Crash Daemon Lifecycle)
+==============================================================================
+Date:        2026-10-07 08:23:00 +08:00
+Domain:      selfso.com (Personal project of Charles Chiou)
+Evaluator:   Antigravity / Gemini
+
+------------------------------------------------------------------------------
+1. Scope & Implementation Overview
+------------------------------------------------------------------------------
+Envelope 16 upgrades the clearance client daemon (`client/netmon-ai-client.c`)
+from a naive 300-second idle countdown to an active Anchor Process Liveness Watchdog:
+
+1. Anchor Process Liveness & Anti-Crash Watchdog:
+   - `get_anchor_proc_info(anchor, &state, &starttime)`:
+     Reads `/proc/<anchor>/stat`, extracts process state (field 3) and starttime
+     clock ticks (field 22).
+   - `is_anchor_alive(anchor, expected_starttime)`:
+     * Asserts process existence in `/proc/<anchor>/stat`.
+     * Rejects Zombie (`'Z'`) and Dead (`'X'`) processes.
+     * Prevents PID recycling collisions by validating that `starttime` matches
+       the original timestamp recorded when the daemon launched.
+   - Polling interval decreased from 10s to 5s.
+   - Teardown SLA: If the anchor process terminates or crashes, the daemon detects
+     death within 5 seconds, transmits `CLOSE` over TCP, unlinks the local domain
+     socket `/tmp/netmon-ai-<anchor>.sock`, and exits cleanly.
+
+2. Indefinite Grant Session Retention:
+   - For approved indefinite grants (`grant_seconds == 0`), the session remains
+     permanently active as long as the spawning anchor process is alive.
+   - For bounded grants (`grant_seconds > 0`), the server-assigned deadline is
+     enforced.
+   - Ungranted connections retain a 300-second inactivity watchdog to avoid orphaned
+     unapproved handshakes.
+
+3. Wire Protocol Parsing Correction:
+   - Resolved critical wire protocol bug where `GRANTED <connId> <seconds>` caused
+     the single-digit connection ID to be parsed as the expiration duration,
+     leading indefinite grants (`0`) to expire prematurely in `connId` seconds.
+   - Both two-token (`GRANTED <connId> <seconds>`) and single-token (`GRANTED <seconds>`)
+     formats are now parsed with 100% precision.
+
+------------------------------------------------------------------------------
+2. Unit Test Qualification
+------------------------------------------------------------------------------
+Target: build/test_netmon_suite -sg ClearanceClientTest
+CppUTest Group: ClearanceClientTest
+Tests Run: 6
+Passed:    6
+Failed:    0
+
+Targeted Test Cases:
+- `ClearanceClientTest.AnchorTerminationTriggersDaemonTeardown`:
+  Forks mock anchor process and mock netmon server. Launches client daemon.
+  Kills mock anchor with SIGKILL. Confirms server worker receives `CLOSE`
+  and local domain socket is cleanly unlinked within 5.02s.
+- `ClearanceClientTest.GrantedWireProtocolParsingHandlesConnIdAndIndefinite`:
+  Mock server sends `GRANTED 5 0`. Verifies client transitions to `state=GRANTED`.
+  Sleeps 6 seconds (exceeding connId=5). Asserts client remains in `state=GRANTED`
+  and `granted=yes` without expiring.
+
+Full Suite Qualification:
+- `make test` executed across all suites.
+- 479 CppUTest tests passed cleanly (0 failed, 0 regressions).
+- 10 RapidCheck property-based parser suites passed (1,000 randomized property checks).
+
+------------------------------------------------------------------------------
+3. Pre-Commit Compliance Gate
+------------------------------------------------------------------------------
+Command Executed:
+  python3 ../intelligence/scripts/check_compliance.py --policy selfso
+
+Result:
+  === Pre-Commit Compliance Scanner (Domain: selfso) ===
+  ✅ All compliance checks passed cleanly!
+
+Status: Envelope 16 QUALIFIED & PASSED.

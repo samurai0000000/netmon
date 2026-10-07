@@ -1,0 +1,112 @@
+==============================================================================
+Live Firewall Diagnostic Verification Evidence: Envelope 5 (NAT, DDNS, Virtual Servers, ALG, UPnP)
+==============================================================================
+Date:        2026-10-06 23:34:50 +08:00
+Target Host: 192.168.8.1 (Zyxel USG FLEX 200, Firmware V5.43(ABUI.0))
+Runner:      netmon in-process CppUTest runner via 'firewall diag'
+Daemon:      NetMon v1.0.7 on rhino (192.168.8.30)
+Evaluator:   Antigravity / Gemini
+
+------------------------------------------------------------------------------
+1. Envelope 5 Individual Qualification: 'firewall diag all e5'
+------------------------------------------------------------------------------
+CppUTest Group: LiveFirewallE5
+Total Tests:    22
+Passed:         22
+Failed:         0
+Regressions:    0
+Execution Time: 0.70s
+
+Test Cases Qualified:
+- ReadDdns:                                   PASS (SLA, 11.5 ms)
+- ReadDdnsSpecific (flamingo):                PASS (SLA, 10.4 ms)
+- ReadDdnsStatus:                             PASS (SLA, 10.3 ms)
+- ReadVirtualServers:                         PASS (SLA, 63.3 ms, 13 rules)
+- ReadVirtualServerSpecific (smtp_wan1):      PASS (SLA, 10.3 ms)
+- ReadVirtualServerStatus:                    PASS (SLA, 20.5 ms)
+- ReadVirtualServerLoadBalancer:              PASS (SLA, 10.3 ms)
+- ReadRedirectService:                        PASS (SLA, 20.4 ms)
+- ReadAlgFtp:                                 PASS (SLA, 10.3 ms, port 21)
+- ReadAlgSip:                                 PASS (SLA, 10.3 ms, port 5060)
+- ReadAlgH323:                                PASS (SLA, 10.3 ms, port 1720)
+- DryFireDdnsNonExistent:                     PASS (DRY-FIRE, 10.3 ms)
+- DryFireVirtualServerNonExistent:            PASS (DRY-FIRE, 20.4 ms)
+- DryFireVirtualServerLoadBalancerNonExistent:PASS (DRY-FIRE, 10.3 ms)
+- DryFireHttpRedirectUnsupported:             PASS (DRY-FIRE, 10.2 ms)
+- DryFireRedirectServiceOutOfRange:           PASS (DRY-FIRE, 10.2 ms)
+- DryFireAlgInvalid:                          PASS (DRY-FIRE, 10.2 ms)
+- DryFireUpnpUnsupported:                     PASS (DRY-FIRE, 10.2 ms)
+- DryFireUpnpIgdUnsupported:                  PASS (DRY-FIRE, 10.2 ms)
+- DryFireNatPmpUnsupported:                   PASS (DRY-FIRE, 10.2 ms)
+- WriteDdnsProfileRollback:                   PASS (ROLLBACK, 105.4 ms)
+- WriteVirtualServerRollback:                 PASS (ROLLBACK, 210.2 ms)
+
+Scorecard Summary:
++----------------------+----------+-----------+-------+-------+------------+
+| Test Case            | RTT (ms) | Parse(us) | Bytes | Yield | Result     |
++----------------------+----------+-----------+-------+-------+------------+
+| WriteVirtualServerRo |    210.2 |         0 |  4849 |     1 | PASS (ROLL |
+| WriteDdnsProfileRoll |    105.4 |         0 |  3318 |     1 | PASS (ROLL |
+| DryFireNatPmpUnsuppo |     10.2 |         0 |    88 |     1 | PASS (DRY- |
+| DryFireUpnpIgdUnsupp |     10.2 |         0 |    88 |     1 | PASS (DRY- |
+| DryFireUpnpUnsupport |     10.2 |         0 |    88 |     1 | PASS (DRY- |
+| DryFireAlgInvalid    |     10.2 |         0 |    87 |     1 | PASS (DRY- |
+| DryFireRedirectServi |     10.2 |         0 |   100 |     1 | PASS (DRY- |
+| DryFireHttpRedirectU |     10.2 |         0 |    86 |     1 | PASS (DRY- |
+| DryFireVirtualServer |     10.3 |         0 |    57 |     1 | PASS (DRY- |
+| DryFireVirtualServer |     20.4 |         0 |     8 |     1 | PASS (DRY- |
+| DryFireDdnsNonExiste |     10.3 |         0 |    55 |     1 | PASS (DRY- |
+| ReadAlgH323          |     10.3 |         0 |    88 |     1 | PASS (SLA) |
+| ReadAlgSip           |     10.3 |         0 |   319 |     1 | PASS (SLA) |
+| ReadAlgFtp           |     10.3 |         0 |    88 |     1 | PASS (SLA) |
+| ReadRedirectService  |     20.4 |         0 |     8 |     1 | PASS (SLA) |
+| ReadVirtualServerLoa |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadVirtualServerSta |     20.5 |         0 |     8 |     1 | PASS (SLA) |
+| ReadVirtualServerSpe |     10.3 |         0 |   374 |     1 | PASS (SLA) |
+| ReadVirtualServers   |     63.3 |       273 |  4849 |    13 | PASS (SLA) |
+| ReadDdnsStatus       |     10.3 |        49 |   524 |     2 | PASS (SLA) |
+| ReadDdnsSpecific     |     10.4 |         0 |   805 |     1 | PASS (SLA) |
+| ReadDdns             |     11.5 |         0 |  3318 |     1 | PASS (SLA) |
++----------------------+----------+-----------+-------+-------+------------+
+| SUMMARY: 22 passed, 0 failed, 0 regressions (Total: 0.70s)               |
++--------------------------------------------------------------------------+
+
+------------------------------------------------------------------------------
+2. Cumulative Suite Verification: 'firewall diag all'
+------------------------------------------------------------------------------
+Cumulative Test Groups:
+- LiveFirewallReadDiag:   10 passed
+- LiveFirewallWriteDiag:  11 passed
+- LiveFirewallE1:         17 passed
+- LiveFirewallE2:         15 passed
+- LiveFirewallE3:         34 passed
+- LiveFirewallE4:         35 passed
+- LiveFirewallE5:         22 passed
+Total Tests Executed:     144 passed, 0 failed, 0 regressions
+Cumulative Runtime:       7.92s
+
+------------------------------------------------------------------------------
+3. Firmware Discoveries & Behavioral Invariants (Envelope 5)
+------------------------------------------------------------------------------
+1. Ch 21 (DDNS):
+   - 'show ddns' outputs table with Profile_Name, Domain_Name, WAN_Interface, Activate.
+   - 'show ddns-status' outputs two-line table per entry (index/profile/domain, then IP/status/update_time).
+   - 'show ddns <non_existent>' returns 'retval = -13002 \n ERROR: DDNS profile not found!'.
+   - 'ip ddns profile <name>' / 'no ip ddns profile <name>' creates and removes cleanly.
+2. Ch 22 (Virtual Servers):
+   - 'show ip virtual-server' outputs block format with name, index, active, interface, original/mapped IP, service.
+   - Adding a virtual server requires an existing service object for 'map-type original-service'.
+   - Clean deletion via 'no ip virtual-server <name>'.
+3. Ch 23 (HTTP Redirect):
+   - 'show ip http-redirect' returns parse error on USG FLEX 200, serving as dry-fire negative test.
+4. Ch 24 (Redirect Service):
+   - 'show redirect-service' is valid. 'show redirect-service 1' returns 'Rule number out of range: 02020', 'show redirect-service 99' returns parse error.
+5. Ch 25 (ALG):
+   - 'show alg' alone errors, but 'show alg ftp', 'show alg sip', 'show alg h323' return structured status blocks.
+   - FTP: active: yes, signaling port: 21. SIP: signaling port 5060 in table. H323: signaling port: 1720.
+6. Ch 26 (UPnP):
+   - 'show upnp', 'show upnp-igd', 'show nat-pmp' all return parse error on USG FLEX business firmware (dry-fire rejection).
+
+==============================================================================
+GATE ENVELOPE 5: QUALIFIED AND CLOSED
+==============================================================================

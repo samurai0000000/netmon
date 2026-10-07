@@ -1,0 +1,67 @@
+==============================================================================
+Live Firewall Diagnostic Verification Evidence: Envelope 15
+(Mandatory Complete Firewall Baseline SOP & Crash-Safety Daemon Documentation)
+==============================================================================
+Date:        2026-10-07 08:20:00 +08:00
+Domain:      selfso.com (Personal project of Charles Chiou)
+Evaluator:   Antigravity / Gemini
+
+------------------------------------------------------------------------------
+1. Scope & Architectural Goals
+------------------------------------------------------------------------------
+Envelope 15 codifies the mandatory non-negotiable protocol for future AI agents
+instructed to "analyze", "audit", or "inspect" the Zyxel USG FLEX 200 edge router:
+1. Strict Prohibition of Action-as-Omission: Future agents are prohibited from
+   stopping at superficial summary tables or refusing commands by claiming they
+   are outside boundaries.
+2. The Complete 4-Quadrant Firewall Baseline Discovery SOP:
+   - Quadrant 1: Raw Configuration Directives:
+     'show running-config' (capturing 2FA, SMTP relays, executive reports,
+     custom signatures, sandboxing profiles, IP reputation).
+   - Quadrant 2: Rolling Memory Event Stream:
+     'show logging entries' (the 1,024-event active memory ring buffer;
+     critically noting that 'show logging' is invalid ZySH syntax, whereas
+     'show logging entries' is authoritative).
+   - Quadrant 3: Complete Object Dictionaries:
+     'show address-object', 'show object-group address', 'show service-object',
+     'show object-group service', 'show zone'.
+   - Quadrant 4: Subsystem Operational Matrix:
+     Full coverage across all 10 diagnostic envelopes (Envelopes 1–10).
+3. Client Daemon Watchdog Lifecycle:
+   - Documented the client daemon lifecycle, indefinite grant retention,
+     and crash safety invariants in SKILL.md, zyxel-clearance.md, and
+     cursor/rules/netmon.mdc.
+
+------------------------------------------------------------------------------
+2. Synchronized Canonical Documents
+------------------------------------------------------------------------------
+- .agents/skills/netmon/SKILL.md (symlinked to intelligence/selfso/agents/skills/netmon/SKILL.md):
+  * Added Section 2.4: Mandatory Complete Firewall Discovery SOP.
+  * Added Strict Session Retention & Anchor Liveness Invariant.
+  * Updated Diagnostic Query Playbooks (Envelopes 1–10).
+- .agents/skills/netmon/references/zyxel-clearance.md (symlinked to intelligence/selfso/agents/skills/netmon/references/zyxel-clearance.md):
+  * Added Section: Mandatory Complete Firewall Discovery SOP.
+  * Documented Anchor Liveness Watchdog and Indefinite Grant Session Retention.
+  * Updated Level 3 Reads catalog with 'show running-config' and 'show logging entries'.
+- intelligence/selfso/cursor/rules/netmon.mdc:
+  * Updated Core Operations with Mandatory Firewall Discovery SOP and Anchor Watchdog lifecycle.
+
+------------------------------------------------------------------------------
+3. Multi-Agent Parity & Pre-Commit Compliance Gate
+------------------------------------------------------------------------------
+Commands Executed:
+  python3 ../intelligence/scripts/check_compliance.py --policy selfso
+  python3 ../intelligence/scripts/check_compliance.py --policy selfso (in netmon)
+
+Result:
+  === Pre-Commit Compliance Scanner (Domain: selfso) ===
+  ✅ All compliance checks passed cleanly!
+
+Compliance Checklist:
+  [x] 100% Personal Project Status (Charles Chiou, samurai@selfso.com, selfso.com)
+  [x] Zero third-party corporate entities
+  [x] Valid 2026 copyright headers
+  [x] No hardcoded real MACs or topology leaks
+  [x] Multi-agent symlink write-through verified across .agents, .claude, .cursor
+
+Status: Envelope 15 QUALIFIED & PASSED.

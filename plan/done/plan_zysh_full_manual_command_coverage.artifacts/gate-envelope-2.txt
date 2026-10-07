@@ -1,0 +1,103 @@
+==============================================================================
+Live Firewall Diagnostic Verification Evidence: Envelope 2 (Interfaces, Zones, Trunks)
+==============================================================================
+Date:        2026-10-06 22:20:43 +08:00
+Target Host: 192.168.8.1 (Zyxel USG FLEX 200, Firmware V5.43(ABUI.0))
+Runner:      netmon in-process CppUTest runner via 'firewall diag'
+Daemon:      NetMon v1.0.7 on rhino (192.168.8.30)
+Evaluator:   Antigravity / Gemini
+
+------------------------------------------------------------------------------
+1. Envelope 2 Individual Qualification: 'firewall diag all e2'
+------------------------------------------------------------------------------
+CppUTest Group: LiveFirewallE2
+Total Tests:    15
+Passed:         15
+Failed:         0
+Regressions:    0
+Execution Time: 0.99s
+
+Scorecard:
++--------------------------------------------------------------------------+
+| LIVE FIREWALL QUALIFICATION & BENCHMARK REPORT                           |
++--------------------------------------------------------------------------+
+| Target Host : 192.168.8.1 (USG FLEX 200)                                 |
+| Timestamp   : 2026-10-06 22:20:15                                        |
++--------------------------------------------------------------------------+
+| Test Case            | RTT (ms) | Parse(us) | Bytes | Yield | Result     |
++----------------------+----------+-----------+-------+-------+------------+
+| DryFireInvalidInterf |     10.3 |         0 |    81 |     1 | PASS (REJE |
+| NegativeReadNonExist |     10.4 |         0 |    81 |     1 | PASS (REJE |
+| ReadL2IsolationWhite |     10.3 |         0 |     0 |     1 | PASS (SLA) |
+| ReadL2IsolationActiv |     10.3 |        14 |    30 |     1 | PASS (SLA) |
+| ReadL2Isolation      |     10.3 |         0 |    10 |     1 | PASS (SLA) |
+| ReadZoneBindingIface |     10.4 |        32 |   513 |     5 | PASS (SLA) |
+| ReadZoneDefaultBindi |     10.4 |        32 |   513 |     5 | PASS (SLA) |
+| ReadZoneLan1         |     10.3 |         0 |   248 |     1 | PASS (SLA) |
+| ReadZones            |     30.6 |        71 |   641 |    10 | PASS (SLA) |
+| ReadArpGratuitous    |     10.3 |        14 |    66 |     1 | PASS (SLA) |
+| ReadIpDhcpBinding    |    192.4 |        16 |   231 |     0 | PASS (SLA) |
+| ReadInterfaceDetailW |     10.4 |        50 |   676 |     1 | PASS (SLA) |
+| ReadInterfaceDetailL |     10.5 |        46 |   700 |     1 | PASS (SLA) |
+| ReadInterfaceBase    |    223.2 |        64 |  1231 |    10 | PASS (SLA) |
+| ReadInterfaceSummary |    415.6 |       320 |  1092 |    10 | PASS (SLA) |
++----------------------+----------+-----------+-------+-------+------------+
+| SUMMARY: 15 passed, 0 failed, 0 regressions (Total: 0.99s)               |
++--------------------------------------------------------------------------+
+
+------------------------------------------------------------------------------
+2. Cumulative Suite Verification: 'firewall diag all'
+------------------------------------------------------------------------------
+CppUTest Groups: LiveFirewallReadDiag, LiveFirewallWriteDiag, LiveFirewallE1, LiveFirewallE2
+Total Tests:     53
+Passed:          53
+Failed:          0
+Regressions:     0
+Execution Time:  5.24s
+
+Cumulative Summary:
++--------------------------------------------------------------------------+
+| SUMMARY: 53 passed, 0 failed, 0 regressions (Total: 5.24s)               |
++--------------------------------------------------------------------------+
+
+Included Suites:
+- LiveFirewallReadDiag:  10 tests (version, cpu, mem, conn, iface, routes, objects, policies, nat)
+- LiveFirewallWriteDiag: 11 tests (address, service, virtual-server, fast-deny rule, syntax recovery)
+- LiveFirewallE1:        17 tests (system, clock, dns, log, disk, mac, led, slot, serial, boot, sockets, ram, comport, dry-fire)
+- LiveFirewallE2:        15 tests (interfaces, detail, base, dhcp, arp, zones, l2-isolation, negative read, dry-fire)
+
+------------------------------------------------------------------------------
+3. Firmware Ground Truth & Grammar Discoveries
+------------------------------------------------------------------------------
+Platform: USG FLEX 200 (Firmware V5.43(ABUI.0))
+1. Verified Commands:
+   - 'show interface summary all' -> Full interface inventory table
+   - 'show interface base' -> Base interface port and type table
+   - 'show interface lan1' -> Interface detail block (IP 192.168.8.1, physical ports P4..P7)
+   - 'show interface wan1' -> External interface detail block (P2)
+   - 'show ip dhcp binding' -> DHCP server lease allocation table
+   - 'show arp gratuitous' -> Gratuitous ARP status (no) and interval (0s)
+   - 'show zone' -> Zone table with member interfaces and reference counts
+   - 'show zone LAN1' -> Interface members for zone LAN1
+   - 'show zone default-binding' -> Interface to default binding zone mappings
+   - 'show zone binding-iface' -> Interface to active zone mappings
+   - 'show l2-isolation' -> L2 isolation interface table
+   - 'show l2-isolation activation' -> L2 isolation status (no)
+   - 'show l2-isolation white-list' -> MAC whitelist table
+2. Negative Rejection Assertions:
+   - 'show interface non_existent_iface_999' returns explicit '% (after 'interface'): Parse error' / 'ERROR: Parse error/command not found!'
+   - 'interface invalid_test_iface_999' returns '% (after 'interface'): Parse error' / 'ERROR: Parse error/command not found!'
+3. Scanner Robustness:
+   - Enhanced findDividerLine to handle multi-line wrapped column headers (e.g. 'Ref' and 'Description' wrapping onto second header line immediately above '====' divider).
+   - Enhanced parseZones to robustly parse USG FLEX 200 multi-line table layouts with numeric reference counts.
+
+------------------------------------------------------------------------------
+4. Invariants Verification
+------------------------------------------------------------------------------
+[x] Zero Mocks: All 53 tests executed over live SSH against 192.168.8.1.
+[x] Zero NVRAM Flash Writes: No 'write' command sent to firewall.
+[x] Zero Dangerous Interface Mutations: No interface/VLAN/trunk creation on live device.
+[x] 25ms Test Spacing: Applied in setup() across all diagnostic runs.
+[x] Prompt Unwind: Guard unwound to root prompt 'Router#' after every test.
+[x] Clean Session State: Final prompt is clean at 'netmon>'.
+==============================================================================

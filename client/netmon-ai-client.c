@@ -141,6 +141,119 @@ static pid_t parse_ppid_from_stat(pid_t pid) {
     return 0;
 }
 
+static pid_t parse_ppid_and_comm(pid_t pid, char *out_comm, size_t comm_len) {
+    if (pid <= 0) {
+        return 0;
+    }
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        return 0;
+    }
+    char buf[1024];
+    if (!fgets(buf, sizeof(buf), fp)) {
+        fclose(fp);
+        return 0;
+    }
+    fclose(fp);
+
+    char *lparen = strchr(buf, '(');
+    char *rparen = strrchr(buf, ')');
+    if (!lparen || !rparen || rparen <= lparen) {
+        return 0;
+    }
+    if (out_comm && comm_len > 0) {
+        size_t n = (size_t)(rparen - (lparen + 1));
+        if (n >= comm_len) n = comm_len - 1;
+        memcpy(out_comm, lparen + 1, n);
+        out_comm[n] = '\0';
+    }
+
+    char state = ' ';
+    int ppid = 0;
+    if (sscanf(rparen + 1, " %c %d", &state, &ppid) == 2 && ppid > 0) {
+        return (pid_t)ppid;
+    }
+    return 0;
+}
+
+static bool is_shell_name(const char *comm) {
+    if (!comm) return false;
+    return (strcmp(comm, "sh") == 0 ||
+            strcmp(comm, "bash") == 0 ||
+            strcmp(comm, "dash") == 0 ||
+            strcmp(comm, "zsh") == 0 ||
+            strcmp(comm, "csh") == 0 ||
+            strcmp(comm, "tcsh") == 0);
+}
+
+static void get_sock_path(char *out_path, size_t max_len, pid_t anchor) {
+    snprintf(out_path, max_len, "/tmp/netmon-ai-%d.sock", (int)anchor);
+}
+
+static bool get_anchor_proc_info(pid_t anchor, char *out_state, uint64_t *out_starttime) {
+    if (anchor <= 0) {
+        return false;
+    }
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)anchor);
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        return false;
+    }
+    char buf[1024];
+    if (!fgets(buf, sizeof(buf), fp)) {
+        fclose(fp);
+        return false;
+    }
+    fclose(fp);
+
+    char *rparen = strrchr(buf, ')');
+    if (!rparen) {
+        return false;
+    }
+
+    char *p = rparen + 1;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (!*p) return false;
+
+    char state = *p;
+    if (out_state) *out_state = state;
+
+    // Advance past state
+    while (*p && !isspace((unsigned char)*p)) p++;
+
+    // There are 18 tokens between state (field 3) and starttime (field 22)
+    for (int i = 0; i < 18; ++i) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (!*p) return false;
+        while (*p && !isspace((unsigned char)*p)) p++;
+    }
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (!*p) return false;
+
+    char *endptr = NULL;
+    unsigned long long st = strtoull(p, &endptr, 10);
+    if (out_starttime) *out_starttime = (uint64_t)st;
+    return true;
+}
+
+static bool is_anchor_alive(pid_t anchor, uint64_t expected_starttime) {
+    char state = ' ';
+    uint64_t st = 0;
+    if (!get_anchor_proc_info(anchor, &state, &st)) {
+        return false; // Process does not exist (/proc/<pid> vanished)
+    }
+    if (state == 'Z' || state == 'z' || state == 'X' || state == 'x') {
+        return false; // Process is zombie or terminating
+    }
+    if (expected_starttime > 0 && st != expected_starttime) {
+        return false; // PID was recycled by the OS
+    }
+    return true;
+}
+
 static pid_t get_anchor_pid(void) {
     const char *env = getenv("NETMON_ANCHOR_PID");
     if (env && *env) {
@@ -150,16 +263,47 @@ static pid_t get_anchor_pid(void) {
         }
     }
 
-    pid_t shell_pid = getppid();
-    pid_t anchor = parse_ppid_from_stat(shell_pid);
-    if (anchor > 0) {
-        return anchor;
+    // Step 1: Climb past any intermediate subshells (sh, bash, dash, zsh)
+    // spawned by popen(), system(), or shell redirections.
+    pid_t cur = getppid();
+    char comm[64] = {0};
+    pid_t parent = parse_ppid_and_comm(cur, comm, sizeof(comm));
+    while (is_shell_name(comm) && parent > 1 && parent != cur) {
+        char sock_path[128];
+        get_sock_path(sock_path, sizeof(sock_path), cur);
+        if (access(sock_path, F_OK) == 0) {
+            return cur;
+        }
+        cur = parent;
+        parent = parse_ppid_and_comm(cur, comm, sizeof(comm));
     }
-    return shell_pid;
-}
 
-static void get_sock_path(char *out_path, size_t max_len, pid_t anchor) {
-    snprintf(out_path, max_len, "/tmp/netmon-ai-%d.sock", (int)anchor);
+    // Check if 'cur' itself has an active socket
+    char sock_path[128];
+    get_sock_path(sock_path, sizeof(sock_path), cur);
+    if (access(sock_path, F_OK) == 0) {
+        return cur;
+    }
+
+    // Step 2: Handle Antigravity IDE environment:
+    // In Antigravity IDE, language_server is spawned by node (the persistent IDE anchor).
+    if (strcmp(comm, "language_server") == 0 && parent > 1) {
+        return parent;
+    }
+
+    // Check if parent has an active socket
+    if (parent > 1) {
+        get_sock_path(sock_path, sizeof(sock_path), parent);
+        if (access(sock_path, F_OK) == 0) {
+            return parent;
+        }
+    }
+
+    // Step 3: Default anchor
+    if (parent > 1 && (is_shell_name(comm) || strcmp(comm, "language_server") == 0)) {
+        return parent;
+    }
+    return cur;
 }
 
 static int connect_tcp(const char *endpoint) {
@@ -287,6 +431,9 @@ static void run_daemon(pid_t anchor, const char *endpoint, const char *sock_path
     char pending_conn_id[64] = {0};
 
     uint64_t last_activity = monotonic_time_sec();
+    uint64_t anchor_starttime = 0;
+    char anchor_init_state = ' ';
+    get_anchor_proc_info(anchor, &anchor_init_state, &anchor_starttime);
 
     while (1) {
         struct pollfd pfd[2];
@@ -298,17 +445,37 @@ static void run_daemon(pid_t anchor, const char *endpoint, const char *sock_path
         pfd[1].events = POLLIN;
         pfd[1].revents = 0;
 
-        int poll_res = poll(pfd, 2, 10000); // 10s poll
+        int poll_res = poll(pfd, 2, 5000); // 5s poll
         if (poll_res < 0) {
             if (errno == EINTR) continue;
             break;
         }
 
         uint64_t now = monotonic_time_sec();
-        if (now >= last_activity + IDLE_TIMEOUT_SEC) {
-            // Idle timeout
+
+        // Anchor Process Liveness Watchdog:
+        // If the anchor process (IDE or terminal shell) is dead or zombie, or PID was recycled,
+        // immediately close session and self-terminate within 5 seconds.
+        if (!is_anchor_alive(anchor, anchor_starttime)) {
             send_msg(tcp_fd, "CLOSE");
             break;
+        }
+
+        // Grant & Inactivity Watchdog:
+        if (is_granted) {
+            if (grant_seconds > 0) {
+                // Bounded grant: respect expiration deadline
+                if (now >= grant_timestamp + grant_seconds) {
+                    is_granted = false;
+                }
+            }
+            // Indefinite grant (grant_seconds == 0): stays active indefinitely as long as anchor lives!
+        } else {
+            // Ungranted connection: clean up if left completely unused for IDLE_TIMEOUT_SEC
+            if (now >= last_activity + IDLE_TIMEOUT_SEC) {
+                send_msg(tcp_fd, "CLOSE");
+                break;
+            }
         }
 
         // Check for unsolicited remote disconnect
@@ -415,7 +582,20 @@ static void run_daemon(pid_t anchor, const char *endpoint, const char *sock_path
                                     }
                                     while (*p == ' ') p++;
                                     if (*p >= '0' && *p <= '9') {
-                                        grant_seconds = (uint32_t)strtoul(p, NULL, 10);
+                                        char *endp = NULL;
+                                        unsigned long first_num = strtoul(p, &endp, 10);
+                                        if (endp && *endp) {
+                                            while (*endp == ' ') endp++;
+                                            if (*endp >= '0' && *endp <= '9') {
+                                                // Format: GRANTED <conn_id> <seconds>
+                                                grant_seconds = (uint32_t)strtoul(endp, NULL, 10);
+                                            } else {
+                                                // Format: GRANTED <seconds>
+                                                grant_seconds = (uint32_t)first_num;
+                                            }
+                                        } else {
+                                            grant_seconds = (uint32_t)first_num;
+                                        }
                                     } else {
                                         grant_seconds = 0;
                                     }

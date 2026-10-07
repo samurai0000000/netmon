@@ -267,6 +267,119 @@ TEST(ZyxelSystemCmdTest, ParseErrorsOnCorruptedBuffers) {
     CHECK_FALSE(ZyxelSystemCmd::parsePing("Host unreachable: 100% loss without stats", p));
 }
 
+TEST(ZyxelSystemCmdTest, Envelope1GeneratorsReturnExpectedStrings) {
+    STRCMP_EQUAL("show ip dns server status", ZyxelSystemCmd::cmdShowIpDnsServerStatus().c_str());
+    STRCMP_EQUAL("show logging status", ZyxelSystemCmd::cmdShowLoggingStatus().c_str());
+    STRCMP_EQUAL("show disk", ZyxelSystemCmd::cmdShowDisk().c_str());
+    STRCMP_EQUAL("show mac", ZyxelSystemCmd::cmdShowMac().c_str());
+    STRCMP_EQUAL("show led status", ZyxelSystemCmd::cmdShowLedStatus().c_str());
+    STRCMP_EQUAL("show extension-slot", ZyxelSystemCmd::cmdShowExtensionSlot().c_str());
+    STRCMP_EQUAL("show serial-number", ZyxelSystemCmd::cmdShowSerialNumber().c_str());
+    STRCMP_EQUAL("show boot status", ZyxelSystemCmd::cmdShowBootStatus().c_str());
+    STRCMP_EQUAL("show socket listen", ZyxelSystemCmd::cmdShowSocketListen().c_str());
+    STRCMP_EQUAL("show socket open", ZyxelSystemCmd::cmdShowSocketOpen().c_str());
+    STRCMP_EQUAL("show ram-size", ZyxelSystemCmd::cmdShowRamSize().c_str());
+    STRCMP_EQUAL("show comport status", ZyxelSystemCmd::cmdShowComportStatus().c_str());
+    STRCMP_EQUAL("dir", ZyxelSystemCmd::cmdDir().c_str());
+    STRCMP_EQUAL("shutdown", ZyxelSystemCmd::cmdShutdown().c_str());
+    STRCMP_EQUAL("ip dns server zone-forwarder append * user-defined 192.0.2.1",
+                 ZyxelSystemCmd::cmdAppendDnsZoneForwarder("*", "192.0.2.1").c_str());
+    STRCMP_EQUAL("no ip dns server zone-forwarder 1",
+                 ZyxelSystemCmd::cmdDeleteDnsZoneForwarder(1).c_str());
+    STRCMP_EQUAL("system illegal_probe_test_cmd_12345",
+                 ZyxelSystemCmd::cmdInvalidSystemDryFire().c_str());
+}
+
+TEST(ZyxelSystemCmdTest, ParseEnvelope1StatusCommands) {
+    // DNS server status
+    std::string dnsRaw = "active: yes\nservice control:\n";
+    bool dnsActive = false;
+    CHECK_TRUE(ZyxelSystemCmd::parseIpDnsServerStatus(dnsRaw, dnsActive));
+    CHECK_TRUE(dnsActive);
+
+    // Logging status
+    std::string logRaw = "1024 events logged\nsuppression active  : yes\nsuppression interval: 10\n";
+    int eventsLogged = 0;
+    bool suppression = false;
+    CHECK_TRUE(ZyxelSystemCmd::parseLoggingStatus(logRaw, eventsLogged, suppression));
+    CHECK_EQUAL(1024, eventsLogged);
+    CHECK_TRUE(suppression);
+
+    // Disk
+    std::string diskRaw =
+        "No. Disk                Size(MB)        Usage\n"
+        "===============================================================================\n"
+        "1   image               232             50%\n"
+        "2   onboard flash       2015            14%\n";
+    std::vector<ZyxelDiskEntry> disks;
+    CHECK_TRUE(ZyxelSystemCmd::parseDisk(diskRaw, disks));
+    CHECK_EQUAL(2, static_cast<int>(disks.size()));
+    CHECK_EQUAL(1, disks[0].index);
+    STRCMP_EQUAL("image", disks[0].name.c_str());
+    CHECK_EQUAL(232, disks[0].sizeMb);
+    STRCMP_EQUAL("50%", disks[0].usage.c_str());
+
+    // MAC
+    std::string macRaw = "MAC address: 02:00:00:00:00:01-02:00:00:00:00:07\n";
+    std::string mac;
+    CHECK_TRUE(ZyxelSystemCmd::parseMac(macRaw, mac));
+    STRCMP_EQUAL("02:00:00:00:00:01-02:00:00:00:00:07", mac.c_str());
+
+    // LED
+    std::string ledRaw = "sys: green\n";
+    std::string led;
+    CHECK_TRUE(ZyxelSystemCmd::parseLedStatus(ledRaw, led));
+    STRCMP_EQUAL("green", led.c_str());
+
+    // Extension slot
+    std::string extRaw =
+        "No.  Slot            Device                        Status\n"
+        "===============================================================================\n"
+        "1    USB 1           none                          none\n"
+        "2    USB 2           none                          none\n";
+    std::vector<ZyxelExtensionSlotEntry> slots;
+    CHECK_TRUE(ZyxelSystemCmd::parseExtensionSlot(extRaw, slots));
+    CHECK_EQUAL(2, static_cast<int>(slots.size()));
+    CHECK_EQUAL(1, slots[0].slot);
+
+    // Serial number
+    std::string snRaw = "serial number: S232L37100891\n";
+    std::string sn;
+    CHECK_TRUE(ZyxelSystemCmd::parseSerialNumber(snRaw, sn));
+    STRCMP_EQUAL("S232L37100891", sn.c_str());
+
+    // Boot status
+    std::string bootRaw = "boot status code: 1\nboot status message: Firmware update OK\n";
+    int bootCode = 0;
+    std::string bootMsg;
+    CHECK_TRUE(ZyxelSystemCmd::parseBootStatus(bootRaw, bootCode, bootMsg));
+    CHECK_EQUAL(1, bootCode);
+    STRCMP_EQUAL("Firmware update OK", bootMsg.c_str());
+
+    // Sockets
+    std::string sockRaw =
+        "No.   Proto Local_Address                                 Foreign_Address                               State\n"
+        "===============================================================================\n"
+        "1     tcp   127.0.0.1:11080                               0.0.0.0:0                                     LISTEN\n";
+    std::vector<ZyxelSocketEntry> sockets;
+    CHECK_TRUE(ZyxelSystemCmd::parseSocketList(sockRaw, sockets));
+    CHECK_EQUAL(1, static_cast<int>(sockets.size()));
+    STRCMP_EQUAL("tcp", sockets[0].proto.c_str());
+    STRCMP_EQUAL("LISTEN", sockets[0].state.c_str());
+
+    // RAM size
+    std::string ramRaw = "ram size: 2048MB\n";
+    int ramMb = 0;
+    CHECK_TRUE(ZyxelSystemCmd::parseRamSize(ramRaw, ramMb));
+    CHECK_EQUAL(2048, ramMb);
+
+    // Comport
+    std::string comRaw = "console: off\n";
+    std::string com;
+    CHECK_TRUE(ZyxelSystemCmd::parseComportStatus(comRaw, com));
+    STRCMP_EQUAL("off", com.c_str());
+}
+
 /*
  * Local variables:
  * mode: C++

@@ -317,7 +317,20 @@ LineClassification AiSecurityClassifier::classify(const std::string &line,
     // -------------------------------------------------------------
     // Level 3 Read and Diagnostics (Section 3.3)
     // -------------------------------------------------------------
+    // -------------------------------------------------------------
+    // Level 3 Read and Diagnostics (Section 3.3 & Expanded Catalog)
+    // -------------------------------------------------------------
     if (tokens[0] == "show") {
+        if (tokens.size() < 2) {
+            return LineClassification::UNCLASSIFIED;
+        }
+
+        // Specific syntax rejections per router grammar
+        if (tokens[1] == "address-group") {
+            return LineClassification::UNCLASSIFIED;
+        }
+
+        // Check for specific legacy shapes and exact method names first
         if (tokens.size() == 2) {
             if (tokens[1] == "version") {
                 matchedMethodOut = "cmdShowVersion";
@@ -358,17 +371,39 @@ LineClassification AiSecurityClassifier::classify(const std::string &line,
                 matchedMethodOut = "cmdShowConnStatus";
                 return LineClassification::LEVEL3;
             }
-            if (tokens[1] == "interface" && isNameValid(tokens[2])) {
-                matchedMethodOut = "cmdShowInterface";
+            if (tokens[1] == "interface") {
+                if (isNameValid(tokens[2])) {
+                    matchedMethodOut = "cmdShowInterface";
+                    return LineClassification::LEVEL3;
+                }
+                return LineClassification::UNCLASSIFIED;
+            }
+            if (tokens[1] == "interfaces" && tokens[2] == "status") {
+                matchedMethodOut = "cmdShowInterfacesStatus";
                 return LineClassification::LEVEL3;
             }
-            if (tokens[1] == "address-object" && isNameValid(tokens[2])) {
-                matchedMethodOut = "cmdShowAddressObjects";
+            if (tokens[1] == "interfaces" && tokens[2] == "detail") {
+                matchedMethodOut = "cmdShowInterfacesDetail";
                 return LineClassification::LEVEL3;
             }
-            if (tokens[1] == "service-object" && isNameValid(tokens[2])) {
-                matchedMethodOut = "cmdShowServiceObjects";
+            if (tokens[1] == "ip" && tokens[2] == "route") {
+                matchedMethodOut = "cmdShowIpRoutes";
                 return LineClassification::LEVEL3;
+            }
+            if (tokens[1] == "address-object") {
+                if (isNameValid(tokens[2])) {
+                    matchedMethodOut = "cmdShowAddressObjects";
+                    return LineClassification::LEVEL3;
+                }
+                return LineClassification::UNCLASSIFIED;
+            }
+            if (tokens[1] == "service-object") {
+                if (isNameValid(tokens[2])) {
+                    timeoutMsOut = 15000;
+                    matchedMethodOut = "cmdShowServiceObjects";
+                    return LineClassification::LEVEL3;
+                }
+                return LineClassification::UNCLASSIFIED;
             }
             if (tokens[1] == "object-group" && tokens[2] == "address") {
                 matchedMethodOut = "cmdShowAddressGroup";
@@ -378,9 +413,12 @@ LineClassification AiSecurityClassifier::classify(const std::string &line,
                 matchedMethodOut = "cmdShowServiceGroup";
                 return LineClassification::LEVEL3;
             }
-            if (tokens[1] == "secure-policy" && (isPositionValid(tokens[2]) || isNameValid(tokens[2]))) {
-                matchedMethodOut = "cmdShowSecurePolicy";
-                return LineClassification::LEVEL3;
+            if (tokens[1] == "secure-policy") {
+                if (isPositionValid(tokens[2]) || isNameValid(tokens[2])) {
+                    matchedMethodOut = "cmdShowSecurePolicy";
+                    return LineClassification::LEVEL3;
+                }
+                return LineClassification::UNCLASSIFIED;
             }
             if (tokens[1] == "ip" && tokens[2] == "route-settings") {
                 matchedMethodOut = "cmdShowIpRouteSettings";
@@ -396,18 +434,6 @@ LineClassification AiSecurityClassifier::classify(const std::string &line,
                 matchedMethodOut = "cmdShowInterfaces";
                 return LineClassification::LEVEL3;
             }
-            if (tokens[1] == "interfaces" && tokens[2] == "status") {
-                matchedMethodOut = "cmdShowInterfacesStatus";
-                return LineClassification::LEVEL3;
-            }
-            if (tokens[1] == "interfaces" && tokens[2] == "detail") {
-                matchedMethodOut = "cmdShowInterfacesDetail";
-                return LineClassification::LEVEL3;
-            }
-            if (tokens[1] == "ip" && tokens[2] == "route") {
-                matchedMethodOut = "cmdShowIpRoutes";
-                return LineClassification::LEVEL3;
-            }
             if (tokens[1] == "app" && tokens[2] == "statistics" && tokens[3] == "summary") {
                 timeoutMsOut = 15000;
                 matchedMethodOut = "cmdShowAppStatisticsSummary";
@@ -418,19 +444,70 @@ LineClassification AiSecurityClassifier::classify(const std::string &line,
                 matchedMethodOut = "cmdShowIdpStatisticsSummary";
                 return LineClassification::LEVEL3;
             }
-            if (tokens[1] == "object-group" && tokens[2] == "address" && isNameValid(tokens[3])) {
-                matchedMethodOut = "cmdShowAddressGroup";
-                return LineClassification::LEVEL3;
+            if (tokens[1] == "object-group" && tokens[2] == "address") {
+                if (isNameValid(tokens[3])) {
+                    matchedMethodOut = "cmdShowAddressGroup";
+                    return LineClassification::LEVEL3;
+                }
+                return LineClassification::UNCLASSIFIED;
             }
-            if (tokens[1] == "object-group" && tokens[2] == "service" && isNameValid(tokens[3])) {
-                matchedMethodOut = "cmdShowServiceGroup";
-                return LineClassification::LEVEL3;
+            if (tokens[1] == "object-group" && tokens[2] == "service") {
+                if (isNameValid(tokens[3])) {
+                    matchedMethodOut = "cmdShowServiceGroup";
+                    return LineClassification::LEVEL3;
+                }
+                return LineClassification::UNCLASSIFIED;
             }
-            if (tokens[1] == "ip" && tokens[2] == "virtual-server" && isNameValid(tokens[3])) {
-                matchedMethodOut = "cmdShowVirtualServers";
-                return LineClassification::LEVEL3;
+            if (tokens[1] == "ip" && tokens[2] == "virtual-server") {
+                if (isNameValid(tokens[3])) {
+                    timeoutMsOut = 15000;
+                    matchedMethodOut = "cmdShowVirtualServers";
+                    return LineClassification::LEVEL3;
+                }
+                return LineClassification::UNCLASSIFIED;
             }
         }
+
+        // Generalized validation for remaining read-only show commands across all 10 envelopes
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            const std::string &tok = tokens[i];
+            if (tok.empty() || tok.length() > 64) {
+                return LineClassification::UNCLASSIFIED;
+            }
+            if (tok.find("..") != std::string::npos || tok.front() == '/') {
+                return LineClassification::UNCLASSIFIED;
+            }
+            for (char c : tok) {
+                if (!std::isalnum(static_cast<unsigned char>(c)) &&
+                    c != '_' && c != '-' && c != '.' && c != '/') {
+                    return LineClassification::UNCLASSIFIED;
+                }
+            }
+        }
+
+        // Formulate method name and timeout
+        std::string method = "cmdShow";
+        bool cap = true;
+        for (char c : tokens[1]) {
+            if (c == '-' || c == '_') {
+                cap = true;
+            } else if (cap) {
+                method += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                cap = false;
+            } else {
+                method += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+        }
+        matchedMethodOut = method;
+
+        if (tokens[1] == "running-config" || tokens[1] == "startup-config" ||
+            tokens[1] == "logging" || tokens[1] == "crypto" || tokens[1] == "app" ||
+            tokens[1] == "idp" || tokens[1] == "anti-spam" || tokens[1] == "anti-virus") {
+            timeoutMsOut = 15000;
+        } else {
+            timeoutMsOut = 5000;
+        }
+        return LineClassification::LEVEL3;
     }
 
     if (tokens[0] == "ping") {

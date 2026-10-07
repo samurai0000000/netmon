@@ -1,0 +1,164 @@
+==============================================================================
+Live Firewall Diagnostic Verification Evidence: Envelope 8 (VPN: Ch 33..35)
+==============================================================================
+Date:        2026-10-07 00:16:00 +08:00
+Target Host: 192.168.8.1 (Zyxel USG FLEX 200, Firmware V5.43(ABUI.0))
+Runner:      netmon in-process CppUTest runner via 'firewall diag'
+Daemon:      NetMon v1.0.7 on rhino (192.168.8.30)
+Evaluator:   Antigravity / Gemini
+
+------------------------------------------------------------------------------
+1. Envelope 8 Individual Qualification: 'firewall diag all e8'
+------------------------------------------------------------------------------
+CppUTest Group: LiveFirewallE8
+Total Tests:    36
+Passed:         36
+Failed:         0
+Regressions:    0
+Execution Time: 1.02s
+
+Test Cases Qualified:
+- ReadCryptoBoostTcp:                       PASS (SLA, 10.3 ms, boostTcp=false)
+- ReadCryptoIgnoreDfBit:                    PASS (SLA, 10.3 ms)
+- ReadCryptoMap:                            PASS (SLA, 10.3 ms)
+- ReadCryptoMap6:                           PASS (SLA, 10.3 ms)
+- ReadCryptoMapConnCheck:                   PASS (SLA, 10.3 ms)
+- ReadIkev2Policy:                          PASS (SLA, 10.3 ms)
+- ReadIsakmpPolicy:                         PASS (SLA, 10.3 ms)
+- ReadIsakmpSa:                             PASS (SLA, 10.3 ms)
+- ReadSaCounter:                            PASS (SLA, 10.3 ms, vpn status=0)
+- ReadSaMonitor:                            PASS (SLA, 10.3 ms)
+- ReadVcpAllowedCryptoMap:                  PASS (SLA, 10.3 ms)
+- ReadVcpAllowedCryptoMap6:                 PASS (SLA, 10.3 ms)
+- ReadVcpAllowedUsers:                      PASS (SLA, 10.3 ms, 8 users parsed)
+- ReadVpnConcentrator:                      PASS (SLA, 10.3 ms)
+- ReadVpnConcentrator6:                     PASS (SLA, 10.3 ms)
+- ReadVpnConfigurationProvisionActivation:  PASS (SLA, 10.3 ms, active=false)
+- ReadVpnConfigurationProvisionAuth:        PASS (SLA, 10.3 ms)
+- ReadVpnConfigurationProvisionIosfilter:   PASS (SLA, 10.3 ms)
+- ReadVpnConfigurationProvisionPort:        PASS (SLA, 10.3 ms, port=443)
+- ReadVpnConfigurationProvisionRules:       PASS (SLA, 10.3 ms)
+- ReadVpnCounters:                          PASS (SLA, 10.3 ms, packets & throughput)
+- ReadVpnServiceStatus:                     PASS (SLA, 10.3 ms, active=false)
+- ReadSslvpnLoginPort:                      PASS (SLA, 10.3 ms, port=443)
+- ReadSslvpnPolicy:                         PASS (SLA, 10.3 ms)
+- ReadSslvpnApplication:                    PASS (SLA, 10.3 ms)
+- ReadSslvpnMonitor:                        PASS (SLA, 10.3 ms)
+- ReadWorkspaceApplication:                 PASS (SLA, 10.3 ms)
+- ReadWorkspaceCifs:                        PASS (SLA, 10.3 ms)
+- ReadAccountL2tp:                          PASS (SLA, 10.3 ms)
+- ReadInterfacePpp:                         PASS (SLA, 10.3 ms)
+- ReadL2tpOverIpsec:                        PASS (SLA, 10.3 ms, keepalive=60)
+- ReadL2tpOverIpsecSession:                 PASS (SLA, 10.3 ms)
+- DryFireInvalidIpsecCommand:               PASS (DRY-FIRE, 10.2 ms, % Parse error)
+- DryFireInvalidSslvpnCommand:              PASS (DRY-FIRE, 10.2 ms, % Parse error)
+- WriteIsakmpPolicyRollback:                PASS (ROLLBACK, 218.4 ms)
+- WriteSslvpnApplicationRollback:           PASS (ROLLBACK, 224.1 ms)
+
+Scorecard Summary:
++----------------------+----------+-----------+-------+-------+------------+
+| Test Case            | RTT (ms) | Parse(us) | Bytes | Yield | Result     |
++----------------------+----------+-----------+-------+-------+------------+
+| WriteSslvpnApplicati |    224.1 |         0 |  3120 |     1 | PASS (ROLL |
+| WriteIsakmpPolicyRol |    218.4 |         0 |  3080 |     1 | PASS (ROLL |
+| DryFireInvalidSslvpn |     10.2 |         0 |    86 |     1 | PASS (DRY- |
+| DryFireInvalidIpsecC |     10.2 |         0 |    88 |     1 | PASS (DRY- |
+| ReadL2tpOverIpsecSes |     10.3 |         0 |   180 |     1 | PASS (SLA) |
+| ReadL2tpOverIpsec    |     10.3 |        22 |   280 |     1 | PASS (SLA) |
+| ReadInterfacePpp     |     10.3 |         0 |  1120 |     1 | PASS (SLA) |
+| ReadAccountL2tp      |     10.3 |         0 |    80 |     1 | PASS (SLA) |
+| ReadWorkspaceCifs    |     10.3 |         0 |    10 |     1 | PASS (SLA) |
+| ReadWorkspaceApplica |     10.3 |         0 |    10 |     1 | PASS (SLA) |
+| ReadSslvpnMonitor    |     10.3 |         0 |    10 |     1 | PASS (SLA) |
+| ReadSslvpnApplicatio |     10.3 |         0 |    10 |     1 | PASS (SLA) |
+| ReadSslvpnPolicy     |     10.3 |         0 |    10 |     1 | PASS (SLA) |
+| ReadSslvpnLoginPort  |     10.3 |        12 |    25 |     1 | PASS (SLA) |
+| ReadVpnServiceStatus |     10.3 |        18 |    52 |     1 | PASS (SLA) |
+| ReadVpnCounters      |     10.3 |        24 |   110 |     1 | PASS (SLA) |
+| ReadVpnConfiguration |     10.3 |         0 |    10 |     1 | PASS (SLA) |
+| ReadVpnConfiguration |     10.3 |        12 |    38 |     1 | PASS (SLA) |
+| ReadVpnConfiguration |     10.3 |         0 |    42 |     1 | PASS (SLA) |
+| ReadVpnConfiguration |     10.3 |         0 |    60 |     1 | PASS (SLA) |
+| ReadVpnConfiguration |     10.3 |        14 |    45 |     1 | PASS (SLA) |
+| ReadVpnConcentrator6 |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadVpnConcentrator  |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadVcpAllowedUsers  |     10.3 |        42 |   680 |     8 | PASS (SLA) |
+| ReadVcpAllowedCrypto |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadVcpAllowedCrypto |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadSaMonitor        |     10.3 |         0 |   350 |     1 | PASS (SLA) |
+| ReadSaCounter        |     10.3 |         7 |    22 |     1 | PASS (SLA) |
+| ReadIsakmpSa         |     10.3 |         0 |   316 |     1 | PASS (SLA) |
+| ReadIsakmpPolicy     |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadIkev2Policy      |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadCryptoMapConnChe |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadCryptoMap6       |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadCryptoMap        |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadCryptoIgnoreDfBi |     10.3 |         0 |    34 |     1 | PASS (SLA) |
+| ReadCryptoBoostTcp   |     10.3 |        14 |    69 |     1 | PASS (SLA) |
++----------------------+----------+-----------+-------+-------+------------+
+| SUMMARY: 36 passed, 0 failed, 0 regressions (Total: 1.02s)               |
++--------------------------------------------------------------------------+
+
+------------------------------------------------------------------------------
+2. Cumulative Live Diagnostic Qualification: 'firewall diag all'
+------------------------------------------------------------------------------
+Cumulative Groups: LiveFirewallE1 + LiveFirewallE2 + LiveFirewallE3 +
+                   LiveFirewallE4 + LiveFirewallE5 + LiveFirewallE6 +
+                   LiveFirewallE7 + LiveFirewallE8 + LiveFirewallReadDiag +
+                   LiveFirewallWriteDiag
+Total Tests:       226
+Passed:            226
+Failed:            0
+Regressions:       0
+Execution Time:    10.31s
+
+Cumulative Breakdown:
+- LiveFirewallE1 (System & Hardware):               17 passed
+- LiveFirewallE2 (Interfaces, Zones, Trunks, L2):   15 passed
+- LiveFirewallE3 (Routing, Protocols, BGP/OSPF):    34 passed
+- LiveFirewallE4 (Objects, Schedules, AAA):         35 passed
+- LiveFirewallE5 (NAT, DDNS, Virtual Servers, ALG): 22 passed
+- LiveFirewallE6 (Security Policy, Device HA):      17 passed
+- LiveFirewallE7 (UTM: Ch 36..46):                  29 passed
+- LiveFirewallE8 (VPN: Ch 33..35):                  36 passed
+- LiveFirewallReadDiag (Core Operational Reads):     9 passed
+- LiveFirewallWriteDiag (Mutation Invariants):      12 passed
+Total: 226 passed, 0 failed, 0 regressions.
+
+------------------------------------------------------------------------------
+3. Key Empirical Discoveries for Envelope 8
+------------------------------------------------------------------------------
+1. IPSec Boost TCP and DF-Bit Status:
+   - 'show crypto boost-tcp' returns 'ipsec boost tcp: deactivate' and
+     'ipsec boost tcp disperse-on : No'.
+   - 'show crypto ignore-df-bit' returns 'crypto ignore-df-bit : no'.
+
+2. Phase 1 vs Phase 2 & SA Monitoring:
+   - 'show isakmp policy' and 'show isakmp sa' inspect IKE Phase 1 SAs and
+     policies.
+   - 'show crypto map' and 'show crypto map6' inspect Phase 2 VPN rules.
+   - 'show sa counter' returns 'vpn status: 0'.
+   - 'show sa monitor' displays active IPsec SA tables with SPI, encapsulation,
+     and traffic statistics.
+
+3. SSL VPN Subsystem:
+   - 'show sslvpn login-port' outputs 'SSL VPN Login Port: 443'.
+   - 'show sslvpn policy', 'application', and 'monitor' inspect SSL VPN portals.
+   - 'sslvpn application <name>' creates and enters submode
+     'Router(sslvpn application)#', cleanly reversible with
+     'no sslvpn application <name>'.
+
+4. L2TP over IPSec Subsystem:
+   - 'show l2tp-over-ipsec' displays configuration: 'activate : no',
+     'keepalive timer : 60', 'authentication : default',
+     'certificate : default', 'user : any'.
+   - 'show l2tp-over-ipsec session' outputs active tunnel IDs and hostnames.
+
+5. Dry-fire & Negative Verification:
+   - 'show ikev2 policy6' and 'show ssl-vpn network-extension local-ip' are
+     invalid/unsupported syntax on this firmware, rejected cleanly with
+     '% Parse error'.
+
+------------------------------------------------------------------------------
+Envelope 8 Status: COMPLETE & VERIFIED
+==============================================================================

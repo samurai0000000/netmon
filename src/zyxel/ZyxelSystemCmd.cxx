@@ -44,6 +44,74 @@ std::string ZyxelSystemCmd::cmdReboot() {
     return "reboot";
 }
 
+std::string ZyxelSystemCmd::cmdShowIpDnsServerStatus() {
+    return "show ip dns server status";
+}
+
+std::string ZyxelSystemCmd::cmdShowLoggingStatus() {
+    return "show logging status";
+}
+
+std::string ZyxelSystemCmd::cmdShowDisk() {
+    return "show disk";
+}
+
+std::string ZyxelSystemCmd::cmdShowMac() {
+    return "show mac";
+}
+
+std::string ZyxelSystemCmd::cmdShowLedStatus() {
+    return "show led status";
+}
+
+std::string ZyxelSystemCmd::cmdShowExtensionSlot() {
+    return "show extension-slot";
+}
+
+std::string ZyxelSystemCmd::cmdShowSerialNumber() {
+    return "show serial-number";
+}
+
+std::string ZyxelSystemCmd::cmdShowBootStatus() {
+    return "show boot status";
+}
+
+std::string ZyxelSystemCmd::cmdShowSocketListen() {
+    return "show socket listen";
+}
+
+std::string ZyxelSystemCmd::cmdShowSocketOpen() {
+    return "show socket open";
+}
+
+std::string ZyxelSystemCmd::cmdShowRamSize() {
+    return "show ram-size";
+}
+
+std::string ZyxelSystemCmd::cmdShowComportStatus() {
+    return "show comport status";
+}
+
+std::string ZyxelSystemCmd::cmdDir() {
+    return "dir";
+}
+
+std::string ZyxelSystemCmd::cmdShutdown() {
+    return "shutdown";
+}
+
+std::string ZyxelSystemCmd::cmdAppendDnsZoneForwarder(const std::string &zone, const std::string &serverIp) {
+    return "ip dns server zone-forwarder append " + zone + " user-defined " + serverIp;
+}
+
+std::string ZyxelSystemCmd::cmdDeleteDnsZoneForwarder(int index) {
+    return "no ip dns server zone-forwarder " + std::to_string(index);
+}
+
+std::string ZyxelSystemCmd::cmdInvalidSystemDryFire() {
+    return "system illegal_probe_test_cmd_12345";
+}
+
 bool ZyxelSystemCmd::parseVersion(const std::string &raw, ZyxelVersionInfo &out) {
     out = ZyxelVersionInfo();
     auto lines = ZyxelScanner::splitLines(raw);
@@ -509,6 +577,242 @@ bool ZyxelSystemCmd::parseTraceroute(const std::string &raw, ZyxelDiagnosticResu
     ZyxelScanner::logParseError("ZyxelSystemCmd", "traceroute", 0,
                                "No traceroute hops or header detected",
                                lines.empty() ? "" : lines[0]);
+    return false;
+}
+
+bool ZyxelSystemCmd::parseIpDnsServerStatus(const std::string &raw, bool &activeOut) {
+    activeOut = false;
+    auto lines = ZyxelScanner::splitLines(raw);
+    for (const auto &line : lines) {
+        std::string key, val;
+        if (ZyxelScanner::parseKeyValue(line, key, val, ':')) {
+            std::string lowerKey = key;
+            std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+            if (lowerKey == "active") {
+                std::string lowerVal = val;
+                std::transform(lowerVal.begin(), lowerVal.end(), lowerVal.begin(), ::tolower);
+                activeOut = (lowerVal == "yes" || lowerVal == "true" || lowerVal == "1");
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool ZyxelSystemCmd::parseLoggingStatus(const std::string &raw, int &eventsLoggedOut, bool &suppressionOut) {
+    eventsLoggedOut = 0;
+    suppressionOut = false;
+    auto lines = ZyxelScanner::splitLines(raw);
+    bool foundEvents = false;
+    for (const auto &line : lines) {
+        if (line.find("events logged") != std::string::npos) {
+            auto tokens = ZyxelScanner::splitTokens(line);
+            if (!tokens.empty()) {
+                try {
+                    eventsLoggedOut = std::stoi(tokens[0]);
+                    foundEvents = true;
+                } catch (...) {}
+            }
+        }
+        std::string key, val;
+        if (ZyxelScanner::parseKeyValue(line, key, val, ':')) {
+            std::string lowerKey = key;
+            std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+            if (lowerKey.find("suppression active") != std::string::npos) {
+                std::string lowerVal = val;
+                std::transform(lowerVal.begin(), lowerVal.end(), lowerVal.begin(), ::tolower);
+                suppressionOut = (lowerVal == "yes" || lowerVal == "true" || lowerVal == "1");
+            }
+        }
+    }
+    return foundEvents;
+}
+
+bool ZyxelSystemCmd::parseDisk(const std::string &raw, std::vector<ZyxelDiskEntry> &out) {
+    out.clear();
+    auto lines = ZyxelScanner::splitLines(raw);
+    int divIdx = ZyxelScanner::findDividerLine(lines);
+    if (divIdx < 0) {
+        for (size_t i = 0; i < lines.size(); ++i) {
+            std::string trimmed = ZyxelScanner::trim(lines[i]);
+            if (trimmed.length() >= 4 && (trimmed.find("====") == 0 || trimmed.find("----") == 0)) {
+                divIdx = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+    if (divIdx < 0) return false;
+
+    for (size_t i = divIdx + 1; i < lines.size(); ++i) {
+        auto tokens = ZyxelScanner::splitTokens(lines[i]);
+        if (tokens.size() >= 3) {
+            try {
+                ZyxelDiskEntry entry;
+                entry.index = std::stoi(tokens[0]);
+                entry.usage = tokens.back();
+                entry.sizeMb = std::stoi(tokens[tokens.size() - 2]);
+                for (size_t t = 1; t + 2 < tokens.size(); ++t) {
+                    if (!entry.name.empty()) entry.name += " ";
+                    entry.name += tokens[t];
+                }
+                out.push_back(entry);
+            } catch (...) {}
+        }
+    }
+    return !out.empty();
+}
+
+bool ZyxelSystemCmd::parseMac(const std::string &raw, std::string &macOut) {
+    macOut.clear();
+    auto lines = ZyxelScanner::splitLines(raw);
+    for (const auto &line : lines) {
+        std::string key, val;
+        if (ZyxelScanner::parseKeyValue(line, key, val, ':')) {
+            std::string lowerKey = key;
+            std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+            if (lowerKey.find("mac address") != std::string::npos) {
+                macOut = val;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool ZyxelSystemCmd::parseLedStatus(const std::string &raw, std::string &ledStatusOut) {
+    ledStatusOut.clear();
+    auto lines = ZyxelScanner::splitLines(raw);
+    for (const auto &line : lines) {
+        std::string key, val;
+        if (ZyxelScanner::parseKeyValue(line, key, val, ':')) {
+            std::string lowerKey = key;
+            std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+            if (lowerKey.find("sys") != std::string::npos) {
+                ledStatusOut = val;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool ZyxelSystemCmd::parseExtensionSlot(const std::string &raw, std::vector<ZyxelExtensionSlotEntry> &out) {
+    out.clear();
+    auto lines = ZyxelScanner::splitLines(raw);
+    int divIdx = ZyxelScanner::findDividerLine(lines);
+    if (divIdx < 0) return false;
+
+    for (size_t i = divIdx + 1; i < lines.size(); ++i) {
+        auto tokens = ZyxelScanner::splitTokens(lines[i]);
+        if (tokens.size() >= 4) {
+            try {
+                ZyxelExtensionSlotEntry entry;
+                entry.slot = std::stoi(tokens[0]);
+                entry.status = tokens.back();
+                entry.device = tokens[tokens.size() - 2];
+                out.push_back(entry);
+            } catch (...) {}
+        }
+    }
+    return !out.empty();
+}
+
+bool ZyxelSystemCmd::parseSerialNumber(const std::string &raw, std::string &serialNumberOut) {
+    serialNumberOut.clear();
+    auto lines = ZyxelScanner::splitLines(raw);
+    for (const auto &line : lines) {
+        std::string key, val;
+        if (ZyxelScanner::parseKeyValue(line, key, val, ':')) {
+            std::string lowerKey = key;
+            std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+            if (lowerKey.find("serial number") != std::string::npos) {
+                serialNumberOut = val;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool ZyxelSystemCmd::parseBootStatus(const std::string &raw, int &statusCodeOut, std::string &statusMsgOut) {
+    statusCodeOut = 0;
+    statusMsgOut.clear();
+    auto lines = ZyxelScanner::splitLines(raw);
+    bool foundCode = false;
+    for (const auto &line : lines) {
+        std::string key, val;
+        if (ZyxelScanner::parseKeyValue(line, key, val, ':')) {
+            std::string lowerKey = key;
+            std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+            if (lowerKey.find("boot status code") != std::string::npos) {
+                try {
+                    statusCodeOut = std::stoi(val);
+                    foundCode = true;
+                } catch (...) {}
+            } else if (lowerKey.find("boot status message") != std::string::npos) {
+                statusMsgOut = val;
+            }
+        }
+    }
+    return foundCode;
+}
+
+bool ZyxelSystemCmd::parseSocketList(const std::string &raw, std::vector<ZyxelSocketEntry> &out) {
+    out.clear();
+    auto lines = ZyxelScanner::splitLines(raw);
+    int divIdx = ZyxelScanner::findDividerLine(lines);
+    if (divIdx < 0) return false;
+
+    for (size_t i = divIdx + 1; i < lines.size(); ++i) {
+        auto tokens = ZyxelScanner::splitTokens(lines[i]);
+        if (tokens.size() >= 5) {
+            try {
+                ZyxelSocketEntry entry;
+                entry.index = std::stoi(tokens[0]);
+                entry.proto = tokens[1];
+                entry.localAddress = tokens[2];
+                entry.foreignAddress = tokens[3];
+                entry.state = tokens[4];
+                out.push_back(entry);
+            } catch (...) {}
+        }
+    }
+    return !out.empty();
+}
+
+bool ZyxelSystemCmd::parseRamSize(const std::string &raw, int &ramSizeMbOut) {
+    ramSizeMbOut = 0;
+    auto lines = ZyxelScanner::splitLines(raw);
+    for (const auto &line : lines) {
+        std::string key, val;
+        if (ZyxelScanner::parseKeyValue(line, key, val, ':')) {
+            std::string lowerKey = key;
+            std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+            if (lowerKey.find("ram size") != std::string::npos) {
+                try {
+                    ramSizeMbOut = std::stoi(val);
+                    return true;
+                } catch (...) {}
+            }
+        }
+    }
+    return false;
+}
+
+bool ZyxelSystemCmd::parseComportStatus(const std::string &raw, std::string &comportStatusOut) {
+    comportStatusOut.clear();
+    auto lines = ZyxelScanner::splitLines(raw);
+    for (const auto &line : lines) {
+        std::string key, val;
+        if (ZyxelScanner::parseKeyValue(line, key, val, ':')) {
+            std::string lowerKey = key;
+            std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+            if (lowerKey.find("console") != std::string::npos) {
+                comportStatusOut = val;
+                return true;
+            }
+        }
+    }
     return false;
 }
 

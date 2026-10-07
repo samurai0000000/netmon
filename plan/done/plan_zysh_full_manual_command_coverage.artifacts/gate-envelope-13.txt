@@ -1,0 +1,11 @@
+project: netmon
+envelope: envelope13
+language: other
+risk: none
+red_command: not applicable
+red_result: not applicable
+green_command: make test
+green_result: pass
+sanitizer_command: not applicable
+rapidcheck: not applicable
+other_isa: not applicable

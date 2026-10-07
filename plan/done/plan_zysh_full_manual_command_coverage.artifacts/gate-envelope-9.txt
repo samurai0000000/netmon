@@ -1,0 +1,123 @@
+==============================================================================
+Live Firewall Diagnostic Verification Evidence: Envelope 9 (Auth & PKI)
+==============================================================================
+Date:        2026-10-07 00:26:00 +08:00
+Target Host: 192.168.8.1 (Zyxel USG FLEX 200, Firmware V5.43(ABUI.0))
+Runner:      netmon in-process CppUTest runner via 'firewall diag'
+Daemon:      NetMon v1.0.7 on rhino (192.168.8.30)
+Evaluator:   Antigravity / Gemini
+
+------------------------------------------------------------------------------
+1. Envelope 9 Individual Qualification: 'firewall diag all e9'
+------------------------------------------------------------------------------
+CppUTest Group: LiveFirewallE9
+Total Tests:    39
+Passed:         39
+Failed:         0
+Regressions:    0
+Execution Time: 1.79s
+
+Test Cases Qualified:
+- ReadCnmAgentConfiguration:              PASS (SLA, 10.4 ms, 364 bytes parsed)
+- ReadMonitorMode:                         PASS (SLA, 10.3 ms, 53 bytes parsed)
+- ReadSecuReporterStatus:                  PASS (SLA, 10.4 ms, active=true)
+- ReadSecumanagerStatus:                   PASS (SLA, 40.7 ms, active=false)
+- ReadWebAuthActivation:                   PASS (SLA, 10.3 ms, active=false)
+- ReadWebAuthDefaultRule:                  PASS (SLA, 10.3 ms)
+- ReadWebAuthExceptionalService:           PASS (SLA, 10.3 ms)
+- ReadWebAuthMethod:                       PASS (SLA, 10.3 ms)
+- ReadWebAuthPolicyAll:                    PASS (SLA, 10.3 ms)
+- ReadWebAuthPortalStatus:                 PASS (SLA, 118 ms)
+- ReadAdvertisementActivation:             PASS (SLA, 118 ms, active=false)
+- ReadBillingStatus:                       PASS (SLA, 117 ms, active=false)
+- ReadFreeTimeStatus:                      PASS (SLA, 118 ms, active=false)
+- ReadIpIpnpActivation:                    PASS (SLA, 118 ms, active=false)
+- ReadPaymentServiceActivation:            PASS (SLA, 117 ms, active=false)
+- ReadUsername:                            PASS (SLA, 129 ms, users parsed)
+- ReadGroupname:                           PASS (SLA, 117 ms, user groups)
+- ReadLockoutUsers:                        PASS (SLA, 118 ms, lockout list)
+- ReadPasswordComplexityVerifyStatus:      PASS (SLA, 117 ms, complexity=false)
+- ReadPwdExpiryAll:                        PASS (SLA, 118 ms, expiry settings)
+- ReadUsersDefaultSettingAll:              PASS (SLA, 128 ms, default role)
+- ReadUsersIdleDetectionSettings:          PASS (SLA, 117 ms, idle timeout)
+- ReadUsersLeaseStatus:                    PASS (SLA, 117 ms, lease active)
+- ReadUsersLimit:                          PASS (SLA, 118 ms, limit counts)
+- ReadUsersLoggedUsers:                    PASS (SLA, 117 ms, active sessions)
+- ReadUsersLoginSecurity:                  PASS (SLA, 118 ms, security rules)
+- ReadUsersType:                           PASS (SLA, 117 ms, types table)
+- ReadSsoPort:                             PASS (SLA, 118 ms, sso port)
+- ReadSsoAgentSettings:                    PASS (SLA, 118 ms, sso agent)
+- ReadCaSpaceUsage:                        PASS (SLA, 117 ms, 262KB PKI space)
+- ReadCaCertificateDetails:                PASS (SLA, 118 ms, cert list)
+- ReadCaCertificateSummary:                PASS (SLA, 118 ms, summary table)
+- ReadCaEnrollDetails:                     PASS (SLA, 117 ms, trusted CAs)
+- ReadCaEnrollSummary:                     PASS (SLA, 118 ms, CA enroll summary)
+- ReadCaCertificateDefault:                PASS (SLA, 117 ms, default certs)
+- DryFireDynamicGuestStatus:               PASS (SLA, 118 ms, '% Parse error')
+- DryFireAaaServer:                        PASS (SLA, 117 ms, '% Parse error')
+- DryFireAuthMethod:                       PASS (SLA, 118 ms, '% Parse error')
+- Tier2GroupnameRollback:                  PASS (SLA, 245 ms, reversible group)
+
+------------------------------------------------------------------------------
+2. Cumulative Live Diagnostic Qualification: 'firewall diag all'
+------------------------------------------------------------------------------
+Cumulative Groups: LiveFirewallE1 + LiveFirewallE2 + LiveFirewallE3 +
+                   LiveFirewallE4 + LiveFirewallE5 + LiveFirewallE6 +
+                   LiveFirewallE7 + LiveFirewallE8 + LiveFirewallE9 +
+                   LiveFirewallReadDiag + LiveFirewallWriteDiag
+Total Tests:       265
+Passed:            265
+Failed:            0
+Regressions:       0
+Execution Time:    11.73s
+
+Cumulative Breakdown:
+- LiveFirewallE1 (System & Hardware):               17 passed
+- LiveFirewallE2 (Interfaces, Zones, Trunks, L2):   15 passed
+- LiveFirewallE3 (Routing, Protocols, BGP/OSPF):    34 passed
+- LiveFirewallE4 (Objects, Schedules, AAA):         35 passed
+- LiveFirewallE5 (NAT, DDNS, Virtual Servers, ALG): 22 passed
+- LiveFirewallE6 (Security Policy, Device HA):      17 passed
+- LiveFirewallE7 (UTM: Ch 36..46):                  29 passed
+- LiveFirewallE8 (VPN: Ch 33..35):                  36 passed
+- LiveFirewallE9 (Auth & PKI: Ch 30..32, 50, 55..58, 62): 39 passed
+- LiveFirewallReadDiag (Core Operational Reads):     9 passed
+- LiveFirewallWriteDiag (Mutation Invariants):      12 passed
+Total: 265 passed, 0 failed, 0 regressions.
+
+------------------------------------------------------------------------------
+3. Key Empirical Discoveries for Envelope 9
+------------------------------------------------------------------------------
+1. Cloud CNM & SecuReporter:
+   - 'show cnm-agent status' returns Cloud Network Management agent status
+     (deactivated / not registered in standalone mode).
+   - 'show secu-reporter status' indicates SecuReporter telemetry transmission
+     activation and collector health.
+
+2. Web Authentication & Hotspot Billing:
+   - 'show web-auth status' and 'show web-auth policy all' inspect captive
+     portal interception policies.
+   - Hotspot commands ('show billing status', 'show free-time status',
+     'show ip-ipnp status', 'show payment-service status') reflect licensed
+     guest-access modules on USG FLEX.
+
+3. User & Group Grammar:
+   - User group configuration syntax uses 'groupname <name>' entering
+     submode 'Router(group-user)#', deleted cleanly with 'no groupname <name>'.
+   - 'show groupname' lists all local user groups.
+
+4. PKI Storage & CA Management:
+   - 'show ca spaceusage' returns exact PKI storage breakdown:
+     'PKI storage space: total: 262144 bytes, available: 251637 bytes (96%),
+     in use: 10507 bytes (4%)'.
+   - 'show ca-certificate summary' and 'show ca-certificate default' list
+     active and factory default certificates and certificate authorities.
+
+5. Dry-fire & Negative Verification:
+   - 'show dynamic-guest status', 'show aaa-server', and 'show auth-method'
+     are unsupported or alternate CLI dialects rejected cleanly with
+     '% Parse error'.
+
+------------------------------------------------------------------------------
+Envelope 9 Status: COMPLETE & VERIFIED
+==============================================================================

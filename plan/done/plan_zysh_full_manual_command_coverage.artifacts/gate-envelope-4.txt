@@ -1,0 +1,87 @@
+==============================================================================
+Live Firewall Diagnostic Verification Evidence: Envelope 4 (Objects)
+==============================================================================
+Date:        2026-10-06 23:14:13 +08:00
+Target Host: 192.168.8.1 (Zyxel USG FLEX 200, Firmware V5.43(ABUI.0))
+Runner:      netmon in-process CppUTest runner via 'firewall diag'
+Daemon:      NetMon v1.0.7 on rhino (192.168.8.30)
+Evaluator:   Antigravity / Gemini
+
+------------------------------------------------------------------------------
+1. Envelope 4 Individual Qualification: 'firewall diag all e4'
+------------------------------------------------------------------------------
+CppUTest Group: LiveFirewallE4
+Total Tests:    35
+Passed:         35
+Failed:         0
+Regressions:    0
+Execution Time: 0.83s
+
+Scorecard Summary:
++----------------------+----------+-----------+-------+-------+------------+
+| Test Case            | RTT (ms) | Parse(us) | Bytes | Yield | Result     |
++----------------------+----------+-----------+-------+-------+------------+
+| WriteAddress6GroupRo |     72.0 |         0 |     8 |     1 | PASS (ROLL |
+| WriteAddress6SubnetR |     61.7 |         0 |     8 |     1 | PASS (ROLL |
+| WriteAddress6HostRol |     61.7 |         0 |     8 |     1 | PASS (ROLL |
+| WriteScheduleOneTime |     61.5 |         0 |     8 |     1 | PASS (ROLL |
+| DryFireScheduleObjec |     10.3 |         0 |    58 |     1 | PASS (REJE |
+| DryFireServiceObject |     10.3 |         0 |    58 |     1 | PASS (REJE |
+| DryFireAddress6Objec |     10.3 |         0 |    58 |     1 | PASS (REJE |
+| DryFireAddressObject |     10.3 |         0 |    58 |     1 | PASS (REJE |
+| ReadIpv6Dhcp6Binding |     10.3 |         0 |   195 |     1 | PASS (SLA) |
+| ReadDhcp6RequestObje |     10.2 |         0 |     8 |     1 | PASS (SLA) |
+| ReadDhcp6LeaseObject |     10.2 |         0 |     8 |     1 | PASS (SLA) |
+| ReadDhcp6Interface   |     10.3 |         0 |    67 |     1 | PASS (SLA) |
+| ReadSslvpnApplicatio |     10.3 |         0 |     8 |     1 | PASS (SLA) |
+| ReadAccountCellular  |     10.3 |         0 |    49 |     1 | PASS (SLA) |
+| ReadAccountPptp      |     10.3 |         0 |   415 |     1 | PASS (SLA) |
+| ReadAccountPppoe     |     10.3 |        35 |   512 |     3 | PASS (SLA) |
+| ReadGeoIpDatabaseVer |     10.3 |         0 |    86 |     1 | PASS (SLA) |
+| ReadGeoIpDatabaseUpd |     10.3 |         0 |    52 |     1 | PASS (SLA) |
+| ReadGeoIpCountryCode |     10.3 |         0 | 12450 |     1 | PASS (SLA) |
+| ReadFqdnSyncPeriod   |     10.3 |         0 |    26 |     1 | PASS (SLA) |
+| ReadFqdnQueryPeriod  |     10.3 |         0 |    27 |     1 | PASS (SLA) |
+| ReadFqdnObjects      |     10.3 |         0 |   155 |     1 | PASS (SLA) |
+| ReadFqdn             |     10.3 |         0 |    82 |     1 | PASS (SLA) |
+| ReadScheduleOneTime  |     10.3 |         0 |    82 |     1 | PASS (SLA) |
+| ReadScheduleRecurrin |     10.3 |         0 |    82 |     1 | PASS (SLA) |
+| ReadScheduleObjects  |     10.3 |        36 |   169 |     0 | PASS (SLA) |
+| ReadServiceGroupSpec |     10.3 |        25 |   237 |     2 | PASS (SLA) |
+| ReadServiceGroups    |     92.1 |       101 |  2503 |    23 | PASS (SLA) |
+| ReadServiceObjects   |    103.7 |       379 | 10860 |   133 | PASS (SLA) |
+| ReadAddress6Groups   |     10.3 |         0 |   148 |     1 | PASS (SLA) |
+| ReadAddressGroups    |     10.3 |         0 |   148 |     1 | PASS (SLA) |
+| ReadAddress6ObjectSp |     10.3 |         0 |   363 |     1 | PASS (SLA) |
+| ReadAddress6Objects  |     10.9 |       110 |  1894 |     9 | PASS (SLA) |
+| ReadAddressObjectSpe |     10.2 |         0 |   277 |     1 | PASS (SLA) |
+| ReadAddressObjects   |     11.1 |       140 |  2155 |    18 | PASS (SLA) |
++----------------------+----------+-----------+-------+-------+------------+
+| SUMMARY: 35 passed, 0 failed, 0 regressions (Total: 0.83s)               |
++--------------------------------------------------------------------------+
+
+------------------------------------------------------------------------------
+2. Cumulative Suite Verification: 'firewall diag all'
+------------------------------------------------------------------------------
+CppUTest Groups: LiveFirewallReadDiag, LiveFirewallWriteDiag, LiveFirewallE1,
+                 LiveFirewallE2, LiveFirewallE3, LiveFirewallE4
+Total Tests:     122
+Passed:          122
+Failed:          0
+Regressions:     0
+Execution Time:  7.64s
+
+Cumulative Summary:
++--------------------------------------------------------------------------+
+| SUMMARY: 122 passed, 0 failed, 0 regressions (Total: 7.64s)              |
++--------------------------------------------------------------------------+
+
+------------------------------------------------------------------------------
+3. Invariants & Safety Verification
+------------------------------------------------------------------------------
+[PASS] NVRAM Flash Writes:       0 ('write' command strictly omitted)
+[PASS] Isolated Dummy Objects:   NETMON_QA_* (RFC 3849 documentation prefixes)
+[PASS] Rollback Verification:    All added test objects immediately purged
+[PASS] Session Prompt Unwind:    Clean 'Router>' prompt state maintained
+[PASS] Response SLA Bounds:      All commands completed within SLA limits
+==============================================================================

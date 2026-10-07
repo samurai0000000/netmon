@@ -1,0 +1,85 @@
+==============================================================================
+Live Firewall Diagnostic Verification Evidence: Envelope 3 (Routing)
+==============================================================================
+Date:        2026-10-06 22:37:00 +08:00
+Target Host: 192.168.8.1 (Zyxel USG FLEX 200, Firmware V5.43(ABUI.0))
+Runner:      netmon in-process CppUTest runner via 'firewall diag'
+Daemon:      NetMon v1.0.7 on rhino (192.168.8.30)
+Evaluator:   Antigravity / Gemini
+
+------------------------------------------------------------------------------
+1. Envelope 3 Individual Qualification: 'firewall diag all e3'
+------------------------------------------------------------------------------
+CppUTest Group: LiveFirewallE3
+Total Tests:    34
+Passed:         34
+Failed:         0
+Regressions:    0
+Execution Time: 1.77s
+
+Scorecard Summary:
++----------------------+----------+-----------+-------+-------+------------+
+| Test Case            | RTT (ms) | Parse(us) | Bytes | Yield | Result     |
++----------------------+----------+-----------+-------+-------+------------+
+| DryFireInvalidOspfAr |     10.3 |         0 |    95 |     1 | PASS (REJE |
+| DryFireInvalidPolicy |     10.3 |         0 |    81 |     1 | PASS (REJE |
+| DryFireInvalidRoute  |     10.3 |         0 |    81 |     1 | PASS (REJE |
+| ReadBgpNeighbor      |     10.3 |         0 |     0 |     1 | PASS (SLA) |
+| ReadBgpMem           |     10.3 |         0 |   383 |     1 | PASS (SLA) |
+| ReadBgpRoute         |     10.3 |         0 |   153 |     1 | PASS (SLA) |
+| ReadBgpSummary       |     10.3 |         0 |   179 |     1 | PASS (SLA) |
+| ReadBgpGlobal        |     10.3 |        35 |   126 |     1 | PASS (SLA) |
+| ReadRipGlobal        |     10.3 |        34 |   259 |     1 | PASS (SLA) |
+| ReadOspfNeighbor     |     10.3 |         0 |   169 |     1 | PASS (SLA) |
+| ReadOspfDatabase     |     10.3 |         0 |   156 |     1 | PASS (SLA) |
+| ReadOspfGlobal       |     10.3 |        38 |   269 |     1 | PASS (SLA) |
+| ReadBwmActivation    |     10.3 |        12 |    20 |     1 | PASS (SLA) |
+| ReadPolicyRoute6Cont |     10.3 |        12 |    47 |     1 | PASS (SLA) |
+| ReadPolicyRoute6Over |     10.3 |        14 |    52 |     1 | PASS (SLA) |
+| ReadPolicyRoute6Rule |     10.3 |        14 |    17 |     0 | PASS (SLA) |
+| ReadPolicyRoute6     |     10.3 |         0 |     0 |     1 | PASS (SLA) |
+| ReadPolicyRouteBegin |     10.4 |         0 |   472 |     1 | PASS (SLA) |
+| ReadPolicyRouteContr |     10.3 |        12 |    46 |     1 | PASS (SLA) |
+| ReadPolicyRouteContr |     10.3 |        12 |    47 |     1 | PASS (SLA) |
+| ReadPolicyRouteUnder |     20.7 |         0 |   912 |     1 | PASS (SLA) |
+| ReadPolicyRouteOverr |     10.3 |        13 |    47 |     1 | PASS (SLA) |
+| ReadPolicyRouteConnC |     10.3 |         0 |   159 |     1 | PASS (SLA) |
+| ReadPolicyRouteConnC |     10.3 |         0 |     0 |     1 | PASS (SLA) |
+| ReadPolicyRouteRuleC |     35.2 |        14 |    17 |     2 | PASS (SLA) |
+| ReadPolicyRoute      |     20.7 |         0 |   892 |     1 | PASS (SLA) |
+| ReadIpRouteControlVi |     10.3 |        13 |    63 |     1 | PASS (SLA) |
+| ReadIpRouteSettings  |     10.3 |        19 |   143 |     0 | PASS (SLA) |
+| ReadIpRouteBgp       |     91.4 |         0 |   370 |     1 | PASS (SLA) |
+| ReadIpRouteRip       |    567.6 |         0 |   370 |     1 | PASS (SLA) |
+| ReadIpRouteOspf      |     91.3 |         0 |   370 |     1 | PASS (SLA) |
+| ReadIpRouteStatic    |     91.3 |       227 |   370 |     1 | PASS (SLA) |
+| ReadIpRouteConnected |     91.4 |        86 |   726 |     5 | PASS (SLA) |
+| ReadIpRouteKernel    |     91.6 |        87 |   904 |     7 | PASS (SLA) |
++----------------------+----------+-----------+-------+-------+------------+
+| SUMMARY: 34 passed, 0 failed, 0 regressions (Total: 1.77s)               |
++--------------------------------------------------------------------------+
+
+------------------------------------------------------------------------------
+2. Cumulative Suite Verification: 'firewall diag all'
+------------------------------------------------------------------------------
+CppUTest Groups: LiveFirewallReadDiag, LiveFirewallWriteDiag, LiveFirewallE1,
+                 LiveFirewallE2, LiveFirewallE3
+Total Tests:     87
+Passed:          87
+Failed:          0
+Regressions:     0
+Execution Time:  6.11s
+
+Cumulative Summary:
++--------------------------------------------------------------------------+
+| SUMMARY: 87 passed, 0 failed, 0 regressions (Total: 6.11s)               |
++--------------------------------------------------------------------------+
+
+------------------------------------------------------------------------------
+3. Invariants & Safety Verification
+------------------------------------------------------------------------------
+[PASS] NVRAM Flash Writes:       0 ('write' command strictly omitted)
+[PASS] Production Routing Table: Unmodified (0 rogue routes installed)
+[PASS] Session Prompt Unwind:    Clean 'Router>' prompt state maintained
+[PASS] Response SLA Bounds:      All commands completed within SLA limits
+==============================================================================

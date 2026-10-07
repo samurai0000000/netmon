@@ -424,6 +424,197 @@ TEST(ClearanceClientTest, BenchmarkFirewallRulePipelining) {
     close(serverFd);
 }
 
+TEST(ClearanceClientTest, AnchorTerminationTriggersDaemonTeardown) {
+    int serverFd = socket(AF_INET, SOCK_STREAM, 0);
+    CHECK_TRUE(serverFd >= 0);
+    int opt = 1;
+    setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in sin;
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    sin.sin_port = 0;
+    CHECK_EQUAL(0, bind(serverFd, (struct sockaddr *)&sin, sizeof(sin)));
+    CHECK_EQUAL(0, listen(serverFd, 1));
+    socklen_t sinLen = sizeof(sin);
+    CHECK_EQUAL(0, getsockname(serverFd, (struct sockaddr *)&sin, &sinLen));
+    int testPort = ntohs(sin.sin_port);
+
+    // Fork a mock anchor process
+    pid_t mockAnchor = fork();
+    if (mockAnchor == 0) {
+        while (1) {
+            sleep(10);
+        }
+        _exit(0);
+    }
+    CHECK_TRUE(mockAnchor > 0);
+
+    // Spawn server worker to handle handshake and wait for CLOSE
+    pid_t serverWorker = fork();
+    if (serverWorker == 0) {
+        alarm(15);
+        struct sockaddr_in peer;
+        socklen_t peerLen = sizeof(peer);
+        int clientSock = accept(serverFd, (struct sockaddr *)&peer, &peerLen);
+        if (clientSock < 0) _exit(1);
+
+        uint32_t lenBe = 0;
+        if (read(clientSock, &lenBe, 4) != 4) _exit(2);
+        uint32_t len = ntohl(lenBe);
+        std::vector<char> buf(len + 1, 0);
+        if (read(clientSock, buf.data(), len) != (ssize_t)len) _exit(3);
+
+        std::string helloRsp = "HELLO 1";
+        uint32_t rspLenBe = htonl((uint32_t)helloRsp.size());
+        writeAll(clientSock, &rspLenBe, 4);
+        writeAll(clientSock, helloRsp.data(), helloRsp.size());
+
+        // Wait for CLOSE from daemon
+        bool receivedClose = false;
+        while (1) {
+            uint32_t reqLenBe = 0;
+            if (read(clientSock, &reqLenBe, 4) != 4) break;
+            uint32_t reqLen = ntohl(reqLenBe);
+            std::vector<char> reqBuf(reqLen + 1, 0);
+            if (read(clientSock, reqBuf.data(), reqLen) != (ssize_t)reqLen) break;
+            std::string req(reqBuf.data());
+            if (req == "CLOSE") {
+                receivedClose = true;
+                break;
+            }
+        }
+        close(clientSock);
+        close(serverFd);
+        _exit(receivedClose ? 0 : 4);
+    }
+
+    std::string envEndpoint = "127.0.0.1:" + std::to_string(testPort);
+    std::string bin = "NETMON_ANCHOR_PID=" + std::to_string(mockAnchor) + " NETMON_LISTEN=" + envEndpoint + " " + getClientBin();
+
+    int code = 0;
+    std::string out = runCommandCapture(bin + " status", code);
+    LONGS_EQUAL(0, code);
+    CHECK_TRUE(out.find("anchor=" + std::to_string(mockAnchor)) != std::string::npos);
+
+    // Terminate mock anchor process
+    kill(mockAnchor, SIGKILL);
+    int anchorStatus = 0;
+    waitpid(mockAnchor, &anchorStatus, 0);
+
+    // Wait for server worker to witness CLOSE from daemon within timeout
+    int workerStatus = 0;
+    waitpid(serverWorker, &workerStatus, 0);
+    CHECK_EQUAL(0, WEXITSTATUS(workerStatus));
+
+    // Verify local socket is unlinked
+    char sockPath[128];
+    snprintf(sockPath, sizeof(sockPath), "/tmp/netmon-ai-%d.sock", (int)mockAnchor);
+    CHECK_EQUAL(-1, access(sockPath, F_OK));
+
+    close(serverFd);
+}
+
+TEST(ClearanceClientTest, GrantedWireProtocolParsingHandlesConnIdAndIndefinite) {
+    int serverFd = socket(AF_INET, SOCK_STREAM, 0);
+    CHECK_TRUE(serverFd >= 0);
+    int opt = 1;
+    setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in sin;
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    sin.sin_port = 0;
+    CHECK_EQUAL(0, bind(serverFd, (struct sockaddr *)&sin, sizeof(sin)));
+    CHECK_EQUAL(0, listen(serverFd, 1));
+    socklen_t sinLen = sizeof(sin);
+    CHECK_EQUAL(0, getsockname(serverFd, (struct sockaddr *)&sin, &sinLen));
+    int testPort = ntohs(sin.sin_port);
+
+    pid_t mockAnchor = fork();
+    if (mockAnchor == 0) {
+        while (1) {
+            sleep(10);
+        }
+        _exit(0);
+    }
+    CHECK_TRUE(mockAnchor > 0);
+
+    pid_t serverWorker = fork();
+    if (serverWorker == 0) {
+        alarm(15);
+        struct sockaddr_in peer;
+        socklen_t peerLen = sizeof(peer);
+        int clientSock = accept(serverFd, (struct sockaddr *)&peer, &peerLen);
+        if (clientSock < 0) _exit(1);
+
+        uint32_t lenBe = 0;
+        if (read(clientSock, &lenBe, 4) != 4) _exit(2);
+        uint32_t len = ntohl(lenBe);
+        std::vector<char> buf(len + 1, 0);
+        if (read(clientSock, buf.data(), len) != (ssize_t)len) _exit(3);
+
+        std::string helloRsp = "HELLO 1";
+        uint32_t rspLenBe = htonl((uint32_t)helloRsp.size());
+        writeAll(clientSock, &rspLenBe, 4);
+        writeAll(clientSock, helloRsp.data(), helloRsp.size());
+
+        while (1) {
+            uint32_t reqLenBe = 0;
+            if (read(clientSock, &reqLenBe, 4) != 4) break;
+            uint32_t reqLen = ntohl(reqLenBe);
+            std::vector<char> reqBuf(reqLen + 1, 0);
+            if (read(clientSock, reqBuf.data(), reqLen) != (ssize_t)reqLen) break;
+            std::string req(reqBuf.data());
+            if (req.rfind("REQUEST", 0) == 0) {
+                // Wire protocol sends "GRANTED <conn_id> <seconds>" where seconds=0 is indefinite
+                std::string rsp = "GRANTED 5 0";
+                uint32_t rLen = htonl((uint32_t)rsp.size());
+                writeAll(clientSock, &rLen, 4);
+                writeAll(clientSock, rsp.data(), rsp.size());
+            } else if (req == "CLOSE") {
+                break;
+            }
+        }
+        close(clientSock);
+        close(serverFd);
+        _exit(0);
+    }
+
+    std::string envEndpoint = "127.0.0.1:" + std::to_string(testPort);
+    std::string bin = "NETMON_ANCHOR_PID=" + std::to_string(mockAnchor) + " NETMON_LISTEN=" + envEndpoint + " " + getClientBin();
+
+    int code = 0;
+    std::string out = runCommandCapture(bin + " request R", code);
+    LONGS_EQUAL(0, code);
+    CHECK_TRUE(out.find("GRANTED 5 0") != std::string::npos);
+
+    // Verify status immediately after grant
+    out = runCommandCapture(bin + " status", code);
+    LONGS_EQUAL(0, code);
+    CHECK_TRUE(out.find("state=GRANTED") != std::string::npos);
+    CHECK_TRUE(out.find("granted=yes") != std::string::npos);
+
+    // Sleep 6 seconds: if connId (5) was erroneously parsed as seconds, it would have expired!
+    sleep(6);
+
+    out = runCommandCapture(bin + " status", code);
+    LONGS_EQUAL(0, code);
+    CHECK_TRUE(out.find("state=GRANTED") != std::string::npos);
+    CHECK_TRUE(out.find("granted=yes") != std::string::npos);
+
+    // Clean up
+    runCommandCapture(bin + " close", code);
+    kill(mockAnchor, SIGKILL);
+    int anchorStatus = 0;
+    waitpid(mockAnchor, &anchorStatus, 0);
+    int workerStatus = 0;
+    waitpid(serverWorker, &workerStatus, 0);
+    close(serverFd);
+}
+
 /*
  * Local variables:
  * mode: C++
@@ -433,3 +624,4 @@ TEST(ClearanceClientTest, BenchmarkFirewallRulePipelining) {
  * indent-tabs-mode: nil
  * End:
  */
+

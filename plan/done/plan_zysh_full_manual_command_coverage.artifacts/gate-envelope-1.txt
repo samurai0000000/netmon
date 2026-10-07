@@ -1,0 +1,110 @@
+==============================================================================
+Live Firewall Diagnostic Verification Evidence: Envelope 1 (System)
+==============================================================================
+Date:        2026-10-06 22:10:49 +08:00
+Target Host: 192.168.8.1 (Zyxel USG FLEX 200, Firmware V5.43(ABUI.0))
+Runner:      netmon in-process CppUTest runner via 'firewall diag'
+Daemon:      NetMon v1.0.7 on rhino (192.168.8.30)
+Evaluator:   Antigravity / Gemini
+
+------------------------------------------------------------------------------
+1. Envelope 1 Individual Qualification: 'firewall diag all e1'
+------------------------------------------------------------------------------
+CppUTest Group: LiveFirewallE1
+Total Tests:    17
+Passed:         17
+Failed:         0
+Regressions:    0
+Execution Time: 0.33s
+
+Scorecard:
++--------------------------------------------------------------------------+
+| LIVE FIREWALL QUALIFICATION & BENCHMARK REPORT                           |
++--------------------------------------------------------------------------+
+| Target Host : 192.168.8.1 (USG FLEX 200)                                 |
+| Timestamp   : 2026-10-06 22:09:22                                        |
++--------------------------------------------------------------------------+
+| Test Case            | RTT (ms) | Parse(us) | Bytes | Yield | Result     |
++----------------------+----------+-----------+-------+-------+------------+
+| DryFireInvalidSystem |     10.3 |         0 |    78 |     1 | PASS (REJE |
+| ReadComportStatus    |     10.3 |        10 |    21 |     1 | PASS (SLA) |
+| ReadRamSize          |     10.3 |        10 |    25 |     1 | PASS (SLA) |
+| ReadSocketOpen       |     11.5 |        86 |  3336 |     1 | PASS (SLA) |
+| ReadSocketListen     |     31.8 |       112 |  2988 |    24 | PASS (SLA) |
+| ReadBootStatus       |     20.5 |        14 |    68 |     1 | PASS (SLA) |
+| ReadSerialNumber     |     20.4 |         9 |    37 |     1 | PASS (SLA) |
+| ReadExtensionSlot    |     20.4 |        26 |   303 |     2 | PASS (SLA) |
+| ReadLedStatus        |     20.4 |         9 |    19 |     1 | PASS (SLA) |
+| ReadMac              |     20.4 |        10 |    57 |     1 | PASS (SLA) |
+| ReadDisk             |     10.3 |        34 |   225 |     2 | PASS (SLA) |
+| ReadLoggingStatus    |     90.3 |       358 | 31261 |     1 | PASS (SLA) |
+| ReadIpDnsServerStatu |     10.3 |        13 |   182 |     1 | PASS (SLA) |
+| ReadConnStatus       |     10.2 |        13 |   103 |     1 | PASS (SLA) |
+| ReadMemStatus        |     10.3 |        14 |    48 |     1 | PASS (SLA) |
+| ReadCpuStatus        |     10.3 |        11 |    94 |     1 | PASS (SLA) |
+| ReadVersion          |     10.4 |        35 |   579 |     1 | PASS (SLA) |
++----------------------+----------+-----------+-------+-------+------------+
+| SUMMARY: 17 passed, 0 failed, 0 regressions (Total: 0.33s)               |
++--------------------------------------------------------------------------+
+
+------------------------------------------------------------------------------
+2. Cumulative Suite Verification: 'firewall diag all'
+------------------------------------------------------------------------------
+CppUTest Groups: LiveFirewallReadDiag, LiveFirewallWriteDiag, LiveFirewallE1
+Total Tests:     38
+Passed:          38
+Failed:          0
+Regressions:     0
+Execution Time:  4.10s
+
+Cumulative Summary:
++--------------------------------------------------------------------------+
+| SUMMARY: 38 passed, 0 failed, 0 regressions (Total: 4.10s)               |
++--------------------------------------------------------------------------+
+
+Included Suites:
+- LiveFirewallReadDiag:  10 tests (version, cpu, mem, conn, iface, routes, objects, policies, nat)
+- LiveFirewallWriteDiag: 11 tests (address, service, virtual-server, fast-deny rule, syntax recovery)
+- LiveFirewallE1:        17 tests (version, cpu, mem, conn, dns, log, disk, mac, led, slot, serial, boot, sockets, ram, comport, dry-fire)
+
+------------------------------------------------------------------------------
+3. Firmware Ground Truth & Grammar Discoveries
+------------------------------------------------------------------------------
+Platform: USG FLEX 200 (Firmware V5.43(ABUI.0))
+1. Verified Commands:
+   - 'show version' -> Firmware & hardware details
+   - 'show cpu status' -> CPU load percentage
+   - 'show mem status' -> Memory usage percentage
+   - 'show conn status' -> Active session count
+   - 'show ip dns server status' -> DNS cache, cache hits, forwarder zones
+   - 'show logging status' -> Active logging categories & destinations
+   - 'show disk' -> Flash / storage partition table
+   - 'show mac' -> Device base MAC address
+   - 'show led status' -> LED operational states
+   - 'show extension-slot' -> Expansion slots & module status
+   - 'show serial-number' -> Hardware serial number
+   - 'show boot status' -> Firmware boot status & fallback image state
+   - 'show socket listen' -> Listening TCP/UDP daemon sockets
+   - 'show socket open' -> Established/open network sockets
+   - 'show ram-size' -> Total physical RAM
+   - 'show comport status' -> Serial console port parameters
+2. Unsupported / Deprecated Show Commands on V5.43:
+   - 'show clock' -> % (after 'show'): Parse error
+   - 'show date' -> % (after 'show'): Parse error
+   - 'show session-timeout status' -> % (after 'show'): Parse error
+   - 'show packet-flow-explore status' -> % (after 'show'): Parse error
+   - 'show maintenance status' -> % (after 'show'): Parse error
+3. Tier 1 Negative Rejection:
+   - 'system illegal_probe_test_cmd_12345' returns explicit parse error within 10.3 ms, successfully testing negative command rejection without state alteration.
+4. Tier 2 Write Boundary:
+   - DNS zone-forwarder grammar requires numeric index deletion ('no ip dns server zone-forwarder <1..16>'). Per plan Section 0.9/0.13 and risk rule, live writes for DNS are excluded from automated execution to prevent index shifting on physical gateway; verified via offline unit test suite.
+
+------------------------------------------------------------------------------
+4. Invariants Verification
+------------------------------------------------------------------------------
+[x] Zero Mocks: All 38 tests executed over real SSH session against 192.168.8.1.
+[x] Zero NVRAM Flash Writes: No 'write' command sent to firewall.
+[x] 25ms Test Spacing: Applied in setup() across all diagnostic runs.
+[x] Prompt Unwind: Guard unwound to root prompt 'Router#' after every test.
+[x] Clean Session State: Final prompt is clean at 'netmon>'.
+==============================================================================
